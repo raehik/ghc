@@ -1278,7 +1278,6 @@ getFixedTyVars upd_fld_occs univ_tvs cons
                       , (tv1,tv) <- univ_tvs `zip` u_tvs
                       , tv `elemVarSet` fixed_tvs ]
 
-
 -- Disambiguate the fields in a record update.
 -- See Note [Disambiguating record fields] in GHC.Tc.Gen.Head
 disambiguateRecordBinds :: LHsExpr GhcRn -> TcRhoType

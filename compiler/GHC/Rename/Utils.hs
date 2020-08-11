@@ -492,17 +492,39 @@ wildcardDoc herald =
     $$ nest 2 (text "Possible fix" <> colon <+> text "omit the"
                                             <+> quotes (text ".."))
 
-addNameClashErrRn :: RdrName -> [GlobalRdrElt] -> RnM ()
+{-
+Note [addNameClashErrRn]
+
+Why can't we omit a name clash error when one is a record selector but another is not?
+Because the renamer might accept a program incorrectly when NoFieldSelectors is enabled.
+Consider the following code
+
+    data A = A { foo :: Int }
+    data B = B { foo :: Int }
+    foo = 42
+
+When renaming an expression
+
+    (A 0) { foo = 1 }
+
+foo can be A's foo as well B's foo, so this is ambiguous.
+If @any isRecFldGRE gres@ were @all isRecFldGRE gres@, the first conditon passes because of @foo = 42@
+and addNameClashErrRn would not produce any errors.
+-}
+
+addNameClashErrRn :: RdrName -> NE.NonEmpty GlobalRdrElt -> RnM ()
 addNameClashErrRn rdr_name gres
-  | all isLocalGRE gres && not (all isRecFldGRE gres)
-               -- If there are two or more *local* defns, we'll have reported
-  = return ()  -- that already, and we don't want an error cascade
+  | all isLocalGRE gres && not (any isRecFldGRE gres)
+  -- If there are two or more *local* defns, and *none* of them is
+  -- a record field, we'll have reported that already,
+  -- and we don't want an error cascade
+  = return ()
   | otherwise
   = addErr (vcat [ text "Ambiguous occurrence" <+> quotes (ppr rdr_name)
                  , text "It could refer to"
                  , nest 3 (vcat (msg1 : msgs)) ])
   where
-    (np1:nps) = gres
+    np1 NE.:| nps = gres
     msg1 =  text "either" <+> ppr_gre np1
     msgs = [text "    or" <+> ppr_gre np | np <- nps]
     ppr_gre gre = sep [ pp_gre_name gre <> comma

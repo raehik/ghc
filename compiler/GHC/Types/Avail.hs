@@ -117,7 +117,7 @@ gives rise to
             , FieldLabel "foo" True $sel:foo:MkFInt
             , FieldLabel "foo" True $sel:foo:MkFBool ]
 
-Moreover, note that the flIsOverloaded flag need not be the same for
+Moreover, note that the flHasDuplicateRecordFields flag need not be the same for
 all the elements of the list.  In the example above, this occurs if
 the two data instances are defined in different modules, one with
 `-XDuplicateRecordFields` enabled and one with it disabled.  Thus it

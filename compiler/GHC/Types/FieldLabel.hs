@@ -21,7 +21,7 @@ In the normal case (with NoDuplicateRecordFields), a datatype like
 has
 
     FieldLabel { flLabel        = "foo"
-               , flIsOverloaded = False
+               , flHasDuplicateRecordFields = False
                , flSelector     = foo }.
 
 In particular, the Name of the selector has the same string
@@ -29,7 +29,7 @@ representation as the label.  If DuplicateRecordFields
 is enabled, however, the same declaration instead gives
 
     FieldLabel { flLabel        = "foo"
-               , flIsOverloaded = True
+               , flHasDuplicateRecordFields = True
                , flSelector     = $sel:foo:MkT }.
 
 Now the name of the selector ($sel:foo:MkT) does not match the label of
@@ -70,6 +70,10 @@ module GHC.Types.FieldLabel
    , FieldLabel
    , mkFieldLabelOccs
    , fieldLabelPrintableName
+   , DuplicateRecordFields(..)
+   , FieldSelectors(..)
+   , shouldMangleSelectorNames
+   , flIsOverloaded
    )
 where
 
@@ -92,14 +96,49 @@ type FieldLabelString = FastString
 -- | A map from labels to all the auxiliary information
 type FieldLabelEnv = DFastStringEnv FieldLabel
 
+data DuplicateRecordFields = DuplicateRecordFields | NoDuplicateRecordFields deriving (Show, Eq, Typeable, Data)
+instance Binary DuplicateRecordFields where
+    put_ bh f =
+        case f of
+            DuplicateRecordFields -> put_ bh True
+            NoDuplicateRecordFields -> put_ bh False
+    get bh = do
+        got <- get bh
+        case got of
+            True -> pure $ DuplicateRecordFields
+            False -> pure $ NoDuplicateRecordFields
+
+instance Outputable DuplicateRecordFields where
+    ppr DuplicateRecordFields = text "+dup"
+    ppr NoDuplicateRecordFields = text "-dup"
+
+data FieldSelectors = FieldSelectors | NoFieldSelectors deriving (Show, Eq, Typeable, Data)
+instance Binary FieldSelectors where
+    put_ bh f =
+        case f of
+            FieldSelectors -> put_ bh True
+            NoFieldSelectors -> put_ bh False
+    get bh = do
+        got <- get bh
+        if got then
+            pure FieldSelectors
+        else
+            pure NoFieldSelectors
+
+instance Outputable FieldSelectors where
+    ppr FieldSelectors = text "+sel"
+    ppr NoFieldSelectors = text "-sel"
 
 type FieldLabel = FieldLbl Name
 
 -- | Fields in an algebraic record type; see Note [FieldLabel].
 data FieldLbl a = FieldLabel {
       flLabel        :: FieldLabelString, -- ^ User-visible label of the field
-      flIsOverloaded :: Bool,             -- ^ Was DuplicateRecordFields on
+      flHasDuplicateRecordFields :: DuplicateRecordFields,             -- ^ Was DuplicateRecordFields on
                                           --   in the defining module for this datatype?
+      flHasFieldSelector :: FieldSelectors,
+      -- ^ Was FieldSelectors enabled in the defining module for this datatype?
+      -- See Note [NoFieldSelectors] in GHC.Rename.Env
       flSelector     :: a                 -- ^ Record selector function
     }
   deriving (Eq, Functor, Foldable, Traversable)
@@ -112,28 +151,30 @@ instance Outputable a => Outputable (FieldLbl a) where
     ppr fl = ppr (flLabel fl) <> whenPprDebug (braces (ppr (flSelector fl)))
 
 instance Binary a => Binary (FieldLbl a) where
-    put_ bh (FieldLabel aa ab ac) = do
+    put_ bh (FieldLabel aa ab ac ad) = do
         put_ bh aa
         put_ bh ab
         put_ bh ac
+        put_ bh ad
     get bh = do
+        aa <- get bh
         ab <- get bh
         ac <- get bh
         ad <- get bh
-        return (FieldLabel ab ac ad)
+        return (FieldLabel aa ab ac ad)
 
 
 -- | Record selector OccNames are built from the underlying field name
 -- and the name of the first data constructor of the type, to support
 -- duplicate record field names.
 -- See Note [Why selector names include data constructors].
-mkFieldLabelOccs :: FieldLabelString -> OccName -> Bool -> FieldLbl OccName
-mkFieldLabelOccs lbl dc is_overloaded
-  = FieldLabel { flLabel = lbl, flIsOverloaded = is_overloaded
-               , flSelector = sel_occ }
+mkFieldLabelOccs :: FieldLabelString -> OccName -> DuplicateRecordFields -> FieldSelectors -> FieldLbl OccName
+mkFieldLabelOccs lbl dc is_overloaded has_sel
+  = FieldLabel { flLabel = lbl, flHasDuplicateRecordFields = is_overloaded
+               , flSelector = sel_occ, flHasFieldSelector = has_sel }
   where
     str     = ":" ++ unpackFS lbl ++ ":" ++ occNameString dc
-    sel_occ | is_overloaded = mkRecFldSelOcc str
+    sel_occ | shouldMangleSelectorNames is_overloaded has_sel = mkRecFldSelOcc str
             | otherwise     = mkVarOccFS lbl
 
 -- | Undo the name mangling described in Note [FieldLabel] to produce a Name
@@ -144,3 +185,10 @@ fieldLabelPrintableName :: FieldLabel -> Name
 fieldLabelPrintableName fl
   | flIsOverloaded fl = tidyNameOcc (flSelector fl) (mkVarOccFS (flLabel fl))
   | otherwise         = flSelector fl
+
+shouldMangleSelectorNames :: DuplicateRecordFields -> FieldSelectors -> Bool
+shouldMangleSelectorNames is_overloaded has_sel
+    = is_overloaded == DuplicateRecordFields || has_sel == NoFieldSelectors
+
+flIsOverloaded :: FieldLbl a -> Bool
+flIsOverloaded fl = shouldMangleSelectorNames (flHasDuplicateRecordFields fl) (flHasFieldSelector fl)

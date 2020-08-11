@@ -667,9 +667,13 @@ extendGlobalRdrEnvRn avails new_fixities
         dups = filter isDupGRE (lookupGlobalRdrEnv env occ)
         -- Duplicate GREs are those defined locally with the same OccName,
         -- except cases where *both* GREs are DuplicateRecordFields (#17965)
-        -- that are distinct (#9156).
+        -- that are distinct (#9156), or *one of them* is NoFieldSelectors.
+        -- See Note [NoFieldSelectors] in GHC.Rename.Env
+        -- See Note [addNameClashErrRn] in GHC.Rename.Utils
         isDupGRE gre' = isLocalGRE gre'
-                && (not (isOverloadedRecFldGRE gre && isOverloadedRecFldGRE gre')
+                -- AMG TODO review this
+                && (not ((isOverloadedRecFldGRE gre && isOverloadedRecFldGRE gre')
+                           || (isNoFieldSelectorGRE gre || isNoFieldSelectorGRE gre'))
                      || (gre_child gre == gre_child gre'))
 
 
@@ -699,9 +703,11 @@ getLocalNonValBinders fixity_env
                 hs_fords  = foreign_decls })
   = do  { -- Process all type/class decls *except* family instances
         ; let inst_decls = tycl_decls >>= group_instds
-        ; overload_ok <- xoptM LangExt.DuplicateRecordFields
+        ; overload_ok <- xopt_DuplicateRecordFields <$> getDynFlags
+        ; has_sel_flag <- xoptM LangExt.FieldSelectors
+        ; let has_sel = if has_sel_flag then FieldSelectors else NoFieldSelectors
         ; (tc_avails, tc_fldss)
-            <- fmap unzip $ mapM (new_tc overload_ok)
+            <- fmap unzip $ mapM (new_tc overload_ok has_sel)
                                  (tyClGroupTyClDecls tycl_decls)
         ; traceRn "getLocalNonValBinders 1" (ppr tc_avails)
         ; envs <- extendGlobalRdrEnvRn tc_avails fixity_env
@@ -711,7 +717,7 @@ getLocalNonValBinders fixity_env
 
           -- Process all family instances
           -- to bring new data constructors into scope
-        ; (nti_availss, nti_fldss) <- mapAndUnzipM (new_assoc overload_ok)
+        ; (nti_availss, nti_fldss) <- mapAndUnzipM (new_assoc overload_ok has_sel)
                                                    inst_decls
 
           -- Finish off with value binders:
@@ -753,12 +759,12 @@ getLocalNonValBinders fixity_env
     new_simple rdr_name = do{ nm <- newTopSrcBinder rdr_name
                             ; return (avail nm) }
 
-    new_tc :: Bool -> LTyClDecl GhcPs
+    new_tc :: DuplicateRecordFields -> FieldSelectors -> LTyClDecl GhcPs
            -> RnM (AvailInfo, [(Name, [FieldLabel])])
-    new_tc overload_ok tc_decl -- NOT for type/data instances
+    new_tc overload_ok has_sel tc_decl -- NOT for type/data instances
         = do { let (bndrs, flds) = hsLTyClDeclBinders tc_decl
              ; names@(main_name : sub_names) <- mapM newTopSrcBinder bndrs
-             ; flds' <- mapM (newRecordSelector overload_ok sub_names) flds
+             ; flds' <- mapM (newRecordSelector overload_ok has_sel sub_names) flds
              ; let fld_env = case unLoc tc_decl of
                      DataDecl { tcdDataDefn = d } -> mk_fld_env d names flds'
                      _                            -> []
@@ -795,15 +801,15 @@ getLocalNonValBinders fixity_env
               find (\ fl -> flLabel fl == lbl) flds
           where lbl = occNameFS (rdrNameOcc rdr)
 
-    new_assoc :: Bool -> LInstDecl GhcPs
+    new_assoc :: DuplicateRecordFields -> FieldSelectors -> LInstDecl GhcPs
               -> RnM ([AvailInfo], [(Name, [FieldLabel])])
-    new_assoc _ (L _ (TyFamInstD {})) = return ([], [])
+    new_assoc _ _ (L _ (TyFamInstD {})) = return ([], [])
       -- type instances don't bind new names
 
-    new_assoc overload_ok (L _ (DataFamInstD _ d))
-      = do { (avail, flds) <- new_di overload_ok Nothing d
+    new_assoc overload_ok has_sel (L _ (DataFamInstD _ d))
+      = do { (avail, flds) <- new_di overload_ok has_sel Nothing d
            ; return ([avail], flds) }
-    new_assoc overload_ok (L _ (ClsInstD _ (ClsInstDecl { cid_poly_ty = inst_ty
+    new_assoc overload_ok has_sel (L _ (ClsInstD _ (ClsInstDecl { cid_poly_ty = inst_ty
                                                       , cid_datafam_insts = adts })))
       = do -- First, attempt to grab the name of the class from the instance.
            -- This step could fail if the instance is not headed by a class,
@@ -827,33 +833,33 @@ getLocalNonValBinders fixity_env
              Nothing -> pure ([], [])
              Just cls_nm -> do
                (avails, fldss)
-                 <- mapAndUnzipM (new_loc_di overload_ok (Just cls_nm)) adts
+                 <- mapAndUnzipM (new_loc_di overload_ok has_sel (Just cls_nm)) adts
                pure (avails, concat fldss)
 
-    new_di :: Bool -> Maybe Name -> DataFamInstDecl GhcPs
+    new_di :: DuplicateRecordFields -> FieldSelectors -> Maybe Name -> DataFamInstDecl GhcPs
                    -> RnM (AvailInfo, [(Name, [FieldLabel])])
-    new_di overload_ok mb_cls dfid@(DataFamInstDecl { dfid_eqn = ti_decl })
+    new_di overload_ok has_sel mb_cls dfid@(DataFamInstDecl { dfid_eqn = ti_decl })
         = do { main_name <- lookupFamInstName mb_cls (feqn_tycon ti_decl)
              ; let (bndrs, flds) = hsDataFamInstBinders dfid
              ; sub_names <- mapM newTopSrcBinder bndrs
-             ; flds' <- mapM (newRecordSelector overload_ok sub_names) flds
+             ; flds' <- mapM (newRecordSelector overload_ok has_sel sub_names) flds
              ; let avail    = availTC (unLoc main_name) sub_names flds'
                                   -- main_name is not bound here!
                    fld_env  = mk_fld_env (feqn_rhs ti_decl) sub_names flds'
              ; return (avail, fld_env) }
 
-    new_loc_di :: Bool -> Maybe Name -> LDataFamInstDecl GhcPs
+    new_loc_di :: DuplicateRecordFields -> FieldSelectors -> Maybe Name -> LDataFamInstDecl GhcPs
                    -> RnM (AvailInfo, [(Name, [FieldLabel])])
-    new_loc_di overload_ok mb_cls (L _ d) = new_di overload_ok mb_cls d
+    new_loc_di overload_ok has_sel mb_cls (L _ d) = new_di overload_ok has_sel mb_cls d
 
-newRecordSelector :: Bool -> [Name] -> LFieldOcc GhcPs -> RnM FieldLabel
-newRecordSelector _ [] _ = error "newRecordSelector: datatype has no constructors!"
-newRecordSelector overload_ok (dc:_) (L loc (FieldOcc _ (L _ fld)))
+newRecordSelector :: DuplicateRecordFields -> FieldSelectors -> [Name] -> LFieldOcc GhcPs -> RnM FieldLabel
+newRecordSelector _ _ [] _ = error "newRecordSelector: datatype has no constructors!"
+newRecordSelector overload_ok has_sel (dc:_) (L loc (FieldOcc _ (L _ fld)))
   = do { selName <- newTopSrcBinder $ L loc $ field
        ; return $ qualFieldLbl { flSelector = selName } }
   where
     fieldOccName = occNameFS $ rdrNameOcc fld
-    qualFieldLbl = mkFieldLabelOccs fieldOccName (nameOccName dc) overload_ok
+    qualFieldLbl = mkFieldLabelOccs fieldOccName (nameOccName dc) overload_ok has_sel
     field | isExact fld = fld
               -- use an Exact RdrName as is to preserve the bindings
               -- of an already renamer-resolved field and its use
@@ -1211,8 +1217,8 @@ mkChildEnv :: [GlobalRdrElt] -> NameEnv [GlobalRdrElt]
 mkChildEnv gres = foldr add emptyNameEnv gres
   where
     add gre env = case gre_par gre of
-        ParentIs  p    -> extendNameEnv_Acc (:) Utils.singleton env p gre
-        NoParent       -> env
+        ParentIs  p -> extendNameEnv_Acc (:) Utils.singleton env p gre
+        NoParent    -> env
 
 findChildren :: NameEnv [a] -> Name -> [a]
 findChildren env n = lookupNameEnv env n `orElse` []
@@ -1648,7 +1654,7 @@ getMinimalImports = fmap combine . mapM mk_minimal
 
           all_used avail_cs = all (`elem` cs) avail_cs
 
-          all_non_overloaded = all (not . flIsOverloaded)
+          all_non_overloaded = all (\f -> flHasDuplicateRecordFields f == NoDuplicateRecordFields)
 
     combine :: [LImportDecl GhcRn] -> [LImportDecl GhcRn]
     combine = map merge . groupBy ((==) `on` getKey) . sortOn getKey

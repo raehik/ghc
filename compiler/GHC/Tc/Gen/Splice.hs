@@ -92,6 +92,7 @@ import GHC.Core.PatSyn
 import GHC.Core.ConLike
 import GHC.Core.DataCon as DataCon
 
+import GHC.Types.FieldLabel
 import GHC.Types.SrcLoc
 import GHC.Types.Name.Env
 import GHC.Types.Name.Set
@@ -2285,7 +2286,7 @@ reifyName thing
 -- See Note [Reifying field labels]
 reifyFieldLabel :: FieldLabel -> TH.Name
 reifyFieldLabel fl
-  | flIsOverloaded fl
+  | shouldMangleSelectorNames (flHasDuplicateRecordFields fl) (flHasFieldSelector fl)
               = TH.Name (TH.mkOccName occ_str) (TH.NameQ (TH.mkModName mod_str))
   | otherwise = TH.mkNameG_v pkg_str mod_str occ_str
   where

@@ -75,11 +75,13 @@ import GHC.Types.SrcLoc
 import GHC.Types.Literal   ( inCharRange )
 import GHC.Builtin.Types   ( nilDataCon )
 import GHC.Core.DataCon
+import GHC.Driver.Session ( getDynFlags, xopt_DuplicateRecordFields )
 import qualified GHC.LanguageExtensions as LangExt
 
 import Control.Monad       ( when, ap, guard )
 import qualified Data.List.NonEmpty as NE
 import Data.Ratio
+import GHC.Types.FieldLabel (DuplicateRecordFields(..))
 
 {-
 *********************************************************
@@ -728,7 +730,7 @@ rnHsRecUpdFields
     -> RnM ([LHsRecUpdField GhcRn], FreeVars)
 rnHsRecUpdFields flds
   = do { pun_ok        <- xoptM LangExt.RecordPuns
-       ; overload_ok   <- xoptM LangExt.DuplicateRecordFields
+       ; overload_ok <- xopt_DuplicateRecordFields <$> getDynFlags
        ; (flds1, fvss) <- mapAndUnzipM (rn_fld pun_ok overload_ok) flds
        ; mapM_ (addErr . dupFieldErr HsRecFieldUpd) dup_flds
 
@@ -740,7 +742,7 @@ rnHsRecUpdFields flds
   where
     doc = text "constructor field name"
 
-    rn_fld :: Bool -> Bool -> LHsRecUpdField GhcPs
+    rn_fld :: Bool -> DuplicateRecordFields -> LHsRecUpdField GhcPs
            -> RnM (LHsRecUpdField GhcRn, FreeVars)
     rn_fld pun_ok overload_ok (L l (HsRecField { hsRecFieldLbl = L loc f
                                                , hsRecFieldArg = arg
@@ -749,16 +751,13 @@ rnHsRecUpdFields flds
            ; sel <- setSrcSpan loc $
                       -- Defer renaming of overloaded fields to the typechecker
                       -- See Note [Disambiguating record fields] in GHC.Tc.Gen.Head
-                      if overload_ok
-                          then do { mb <- lookupGlobalOccRn_overloaded
-                                            overload_ok lbl
-                                  ; case mb of
-                                      Nothing ->
-                                        do { addErr
-                                               (unknownSubordinateErr doc lbl)
-                                           ; return (Right []) }
-                                      Just r  -> return r }
-                          else fmap Left $ lookupGlobalOccRn lbl
+                      do  { mb <- lookupGlobalOccRn_overloaded_sel overload_ok lbl
+                          ; case mb of
+                              Nothing ->
+                                do { addErr
+                                        (unknownSubordinateErr doc lbl)
+                                    ; return Nothing }
+                              Just r -> return $ Just r }
            ; arg' <- if pun
                      then do { checkErr pun_ok (badPun (L loc lbl))
                                -- Discard any module qualifier (#11662)
@@ -767,16 +766,16 @@ rnHsRecUpdFields flds
                      else return arg
            ; (arg'', fvs) <- rnLExpr arg'
 
-           ; let fvs' = case sel of
-                          Left sel_name -> fvs `addOneFV` sel_name
-                          Right [sel_name] -> fvs `addOneFV` sel_name
-                          Right _       -> fvs
+           ; let fvs' = case sel of -- AMG TODO review this
+                          Just (LookupOccRnUnique sel_name) -> fvs `addOneFV` sel_name
+                          Just (LookupOccRnSelectors (fld NE.:| [])) -> fvs `addOneFV` flSelector fld
+                          _       -> fvs
                  lbl' = case sel of
-                          Left sel_name ->
+                          Just (LookupOccRnUnique sel_name) ->
                                      L loc (Unambiguous sel_name   (L loc lbl))
-                          Right [sel_name] ->
-                                     L loc (Unambiguous sel_name   (L loc lbl))
-                          Right _ -> L loc (Ambiguous   noExtField (L loc lbl))
+                          Just (LookupOccRnSelectors (fld NE.:| [])) ->
+                                     L loc (Unambiguous (flSelector fld) (L loc lbl))
+                          _ -> L loc (Ambiguous   noExtField (L loc lbl))
 
            ; return (L l (HsRecField { hsRecFieldLbl = lbl'
                                      , hsRecFieldArg = arg''

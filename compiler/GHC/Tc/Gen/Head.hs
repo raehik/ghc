@@ -73,6 +73,7 @@ import GHC.Utils.Panic
 import Control.Monad
 
 import Data.Function
+import qualified Data.List.NonEmpty as NE
 
 #include "HsVersions.h"
 
@@ -561,7 +562,9 @@ addAmbiguousNameErr :: RdrName -> TcM ()
 addAmbiguousNameErr rdr
   = do { env <- getGlobalRdrEnv
        ; let gres = lookupGRE_RdrName rdr env
-       ; setErrCtxt [] $ addNameClashErrRn rdr gres}
+       ; case gres of
+         [] -> panic "addAmbiguousNameErr: not found"
+         gre : gres -> setErrCtxt [] $ addNameClashErrRn rdr $ gre NE.:| gres}
 
 -- A type signature on the argument of an ambiguous record selector or
 -- the record expression in an update must be "obvious", i.e. the
@@ -593,7 +596,10 @@ tyConOfET fam_inst_envs ty0 = tyConOf fam_inst_envs =<< checkingExpType_maybe ty
 lookupParents :: RdrName -> RnM [(RecSelParent, GlobalRdrElt)]
 lookupParents rdr
   = do { env <- getGlobalRdrEnv
-       ; let gres = lookupGRE_RdrName rdr env
+        -- filter by isRecFldGRE because otherwise a non-selector variable with an overlapping name can get through
+        -- when NoFieldSelector is enabled
+        -- AMG TODO really need a function to do this consistently!
+       ; let gres = filter isRecFldGRE $ lookupGRE_RdrName rdr env
        ; mapM lookupParent gres }
   where
     lookupParent :: GlobalRdrElt -> RnM (RecSelParent, GlobalRdrElt)
