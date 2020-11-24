@@ -193,6 +193,7 @@ similarNameSuggestions where_look dflags global_env
       | tried_is_qual = [ (rdr_qual, (rdr_qual, how))
                         | gre <- globalRdrEnvElts global_env
                         , isGreOk where_look gre
+                        , not (isNoFieldSelectorGRE gre)
                         , let occ = greOccName gre
                         , correct_name_space occ
                         , (mod, how) <- qualsInScope gre
@@ -201,6 +202,7 @@ similarNameSuggestions where_look dflags global_env
       | otherwise = [ (rdr_unqual, pair)
                     | gre <- globalRdrEnvElts global_env
                     , isGreOk where_look gre
+                    , not (isNoFieldSelectorGRE gre)
                     , let occ = greOccName gre
                           rdr_unqual = mkRdrUnqual occ
                     , correct_name_space occ
