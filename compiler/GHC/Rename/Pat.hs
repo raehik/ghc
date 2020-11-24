@@ -751,13 +751,16 @@ rnHsRecUpdFields flds
            ; sel <- setSrcSpan loc $
                       -- Defer renaming of overloaded fields to the typechecker
                       -- See Note [Disambiguating record fields] in GHC.Tc.Gen.Head
-                      do  { mb <- lookupGlobalOccRn_overloaded_sel overload_ok lbl
-                          ; case mb of
-                              Nothing ->
-                                do { addErr
-                                        (unknownSubordinateErr doc lbl)
-                                    ; return Nothing }
-                              Just r -> return $ Just r }
+                      -- AMG TODO: not clear why we need this test, but T11941 fails if we don't
+                      if overload_ok == DuplicateRecordFields
+                          then do  { mb <- lookupGlobalOccRn_overloaded_sel overload_ok lbl
+                                   ; case mb of
+                                       Nothing ->
+                                         do { addErr
+                                              (unknownSubordinateErr doc lbl)
+                                            ; return Nothing }
+                                       Just r -> return $ Just r }
+                          else fmap (Just . LookupOccRnUnique) $ lookupGlobalOccRn lbl
            ; arg' <- if pun
                      then do { checkErr pun_ok (badPun (L loc lbl))
                                -- Discard any module qualifier (#11662)
