@@ -525,7 +525,7 @@ lookupChildrenExport spec_parent rdr_items =
                                            ChildField fl   -> Right (L (getLoc n) fl)
                                            ChildName  name -> Left (replaceLWrappedName n name)
                                        }
-            IncorrectParent p g td gs -> failWithDcErr p g td gs
+            IncorrectParent p c gs -> failWithDcErr p c gs
 
 
 -- Note: [Typing Pattern Synonym Exports]
@@ -613,7 +613,7 @@ checkPatSynParent parent NoParent child
 
             AConLike (PatSynCon p) -> handle_pat_syn (psErr p) parent_ty_con p
 
-            _ -> failWithDcErr parent mpat_syn (ppr child) [] }
+            _ -> failWithDcErr parent child [] }
   where
     psErr  = exportErrCtxt "pattern synonym"
     selErr = exportErrCtxt "pattern synonym record selector"
@@ -805,11 +805,11 @@ dcErrMsg ty_con what_is thing parents =
                       [_] -> text "Parent:"
                       _  -> text "Parents:") <+> fsep (punctuate comma parents)
 
-failWithDcErr :: Name -> Name -> SDoc -> [Name] -> TcM a
-failWithDcErr parent thing thing_doc parents = do
-  ty_thing <- tcLookupGlobal thing
+failWithDcErr :: Name -> Child -> [Name] -> TcM a
+failWithDcErr parent child parents = do
+  ty_thing <- tcLookupGlobal (childName child)
   failWithTc $ dcErrMsg parent (tyThingCategory' ty_thing)
-                        thing_doc (map ppr parents)
+                        (ppr child) (map ppr parents)
   where
     tyThingCategory' :: TyThing -> String
     tyThingCategory' (AnId i)
