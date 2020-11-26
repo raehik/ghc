@@ -46,7 +46,7 @@ module GHC.Types.Name.Reader (
         GlobalRdrEnv, emptyGlobalRdrEnv, mkGlobalRdrEnv, plusGlobalRdrEnv,
         lookupGlobalRdrEnv, extendGlobalRdrEnv, greOccName, shadowNames,
         pprGlobalRdrEnv, globalRdrEnvElts,
-        lookupGRE_RdrName, lookupGRE_Name,
+        lookupGRE_RdrName, lookupGRE_RdrName', lookupGRE_Name,
         lookupGRE_Child, lookupGRE_FieldLabel,
         lookupGRE_Name_OccName,
         getGRE_NameQualifier_maybes,
@@ -74,6 +74,7 @@ module GHC.Types.Name.Reader (
 
         -- * Utils
         opIsAt,
+        FieldsOrSelectors(..),
   ) where
 
 #include "HsVersions.h"
@@ -806,11 +807,26 @@ greOccName :: GlobalRdrElt -> OccName
 greOccName GRE{gre_child = ChildName n}   = nameOccName n
 greOccName GRE{gre_child = ChildField fl} = mkVarOccFS (flLabel fl)
 
+
+-- | When looking up GREs, we may or may not want to include fields that were
+-- defined in modules with @NoFieldSelectors@ enabled.
+data FieldsOrSelectors
+    = IncludeFieldsWithoutSelectors  -- ^ Include fields in @NoFieldSelectors@ modules
+    | ExcludeFieldsWithoutSelectors  -- ^ Ignore such fields during lookup
+  deriving Eq
+
+filterFieldGREs :: FieldsOrSelectors -> [GlobalRdrElt] -> [GlobalRdrElt]
+filterFieldGREs IncludeFieldsWithoutSelectors = id
+filterFieldGREs ExcludeFieldsWithoutSelectors = filter (not . isNoFieldSelectorGRE)
+
 lookupGRE_RdrName :: RdrName -> GlobalRdrEnv -> [GlobalRdrElt]
-lookupGRE_RdrName rdr_name env
+lookupGRE_RdrName = lookupGRE_RdrName' ExcludeFieldsWithoutSelectors
+
+lookupGRE_RdrName' :: FieldsOrSelectors -> RdrName -> GlobalRdrEnv -> [GlobalRdrElt]
+lookupGRE_RdrName' fos rdr_name env
   = case lookupOccEnv env (rdrNameOcc rdr_name) of
     Nothing   -> []
-    Just gres -> pickGREs rdr_name gres
+    Just gres -> filterFieldGREs fos (pickGREs rdr_name gres)
 
 lookupGRE_Name :: GlobalRdrEnv -> Name -> Maybe GlobalRdrElt
 -- ^ Look for precisely this 'Name' in the environment.  This tests

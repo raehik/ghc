@@ -121,7 +121,7 @@ unknownNameSuggestions_ where_look dflags hpt curr_mod global_env local_env
 
 fieldSelectorSuggestions :: GlobalRdrEnv -> RdrName -> SDoc
 fieldSelectorSuggestions global_env tried_rdr_name
-  = case filter isNoFieldSelectorGRE $ lookupGRE_RdrName tried_rdr_name global_env of
+  = case filter isNoFieldSelectorGRE $ lookupGRE_RdrName' IncludeFieldsWithoutSelectors tried_rdr_name global_env of
     gre : _ -> text "NB:"
       <+> ppr tried_rdr_name
       <+> whose gre

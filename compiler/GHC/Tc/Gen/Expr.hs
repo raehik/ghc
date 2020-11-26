@@ -1310,7 +1310,7 @@ disambiguateRecordBinds record_expr record_rho rbnds res_ty
                                 , [(RecSelParent, GlobalRdrElt)])]
     getUpdFieldsParents
       = fmap (zip rbnds) $ mapM
-          (lookupParents . unLoc . hsRecUpdFieldRdr . unLoc)
+          (lookupParents IncludeFieldsWithoutSelectors . unLoc . hsRecUpdFieldRdr . unLoc)
           rbnds
 
     -- Given a the lists of possible parents for each field,

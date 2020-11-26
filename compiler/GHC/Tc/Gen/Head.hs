@@ -540,7 +540,7 @@ finish_ambiguous_selector lr@(L _ rdr) parent_type
           Nothing -> ambiguousSelector lr ;
           Just p  ->
 
-    do { xs <- lookupParents rdr
+    do { xs <- lookupParents ExcludeFieldsWithoutSelectors rdr
        ; let parent = RecSelData p
        ; case lookup parent xs of {
            Nothing  -> failWithTc (fieldNotInType parent rdr) ;
@@ -593,13 +593,13 @@ tyConOfET fam_inst_envs ty0 = tyConOf fam_inst_envs =<< checkingExpType_maybe ty
 
 -- For an ambiguous record field, find all the candidate record
 -- selectors (as GlobalRdrElts) and their parents.
-lookupParents :: RdrName -> RnM [(RecSelParent, GlobalRdrElt)]
-lookupParents rdr
+lookupParents :: FieldsOrSelectors -> RdrName -> RnM [(RecSelParent, GlobalRdrElt)]
+lookupParents fos rdr
   = do { env <- getGlobalRdrEnv
         -- filter by isRecFldGRE because otherwise a non-selector variable with an overlapping name can get through
         -- when NoFieldSelector is enabled
-        -- AMG TODO really need a function to do this consistently!
-       ; let gres = filter isRecFldGRE $ lookupGRE_RdrName rdr env
+        -- AMG TODO check this, seems implausible
+       ; let gres = filter isRecFldGRE $ lookupGRE_RdrName' fos rdr env
        ; mapM lookupParent gres }
   where
     lookupParent :: GlobalRdrElt -> RnM (RecSelParent, GlobalRdrElt)

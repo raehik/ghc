@@ -123,11 +123,11 @@ rnUnboundVar v =
 rnExpr (HsVar _ (L l v))
   = do { dflags <- getDynFlags
        ; let overload_ok = xopt_DuplicateRecordFields dflags
-       ; mb_name <- lookupOccRn_overloaded_expr overload_ok v
+       ; mb_name <- lookupOccRn_overloaded_maybe True ExcludeFieldsWithoutSelectors overload_ok v
 
        ; case mb_name of {
            Nothing -> rnUnboundVar v ;
-           Just (LookupOccRnUnique name)
+           Just (LookupOccName name)
               | name == nilDataConName -- Treat [] as an ExplicitList, so that
                                        -- OverloadedLists works correctly
                                        -- Note [Empty lists] in GHC.Hs.Expr
@@ -136,9 +136,9 @@ rnExpr (HsVar _ (L l v))
 
               | otherwise
               -> finishHsVar (L l name) ;
-            Just (LookupOccRnSelectors (s NE.:| [])) -> -- AMG TODO review this
+            Just (LookupOccFields (s NE.:| [])) -> -- AMG TODO review this
               return ( HsRecFld noExtField (Unambiguous (flSelector s) (L l v) ), unitFV (flSelector s)) ;
-           Just (LookupOccRnSelectors fs@(_ NE.:| _:_)) ->
+           Just (LookupOccFields fs@(_ NE.:| _:_)) ->
               return ( HsRecFld noExtField (Ambiguous noExtField (L l v))
                      , mkFVs $ NE.toList $ fmap flSelector fs); } }
 

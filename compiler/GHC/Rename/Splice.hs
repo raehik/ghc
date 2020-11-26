@@ -16,6 +16,7 @@ module GHC.Rename.Splice (
 import GHC.Prelude
 
 import GHC.Types.Name
+import GHC.Types.Name.Env
 import GHC.Types.Name.Set
 import GHC.Hs
 import GHC.Types.Name.Reader
@@ -183,6 +184,12 @@ rn_bracket _ (DecBrG {}) = panic "rn_bracket: unexpected DecBrG"
 
 rn_bracket _ (TExpBr x e) = do { (e', fvs) <- rnLExpr e
                                ; return (TExpBr x e', fvs) }
+
+lookupLocalOccThLvl_maybe :: Name -> RnM (Maybe (TopLevelFlag, ThLevel))
+-- Just look in the local environment
+lookupLocalOccThLvl_maybe name
+  = do { lcl_env <- getLclEnv
+       ; return (lookupNameEnv (tcl_th_bndrs lcl_env) name) }
 
 quotationCtxtDoc :: HsBracket GhcPs -> SDoc
 quotationCtxtDoc br_body
