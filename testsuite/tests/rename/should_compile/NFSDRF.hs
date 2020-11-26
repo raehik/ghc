@@ -25,12 +25,12 @@ foo1 = Foo 3 "bar"
 foo2 = Foo { foo = 3, bar = "bar" } -- disambiguate foo
 
 
-foo3 :: Foo
-foo3 = foo1 { foo = 4 } -- update
+-- foo3 :: Foo
+-- foo3 = foo1 { foo = 4 } -- currently rejected, see #18999
 
-foo4 = foo1 { bar = "baz" } -- bar is unambiguous
+foo4 = foo1 { bar = "baz" } -- unambiguous
 
 bar0 = Bar { foo = 0, bar' = "bar'" }
 
-bar1 :: Bar
-bar1 = bar0 { foo = 1 }
+-- bar1 :: Bar
+-- bar1 = bar0 { foo = 1 } -- currently rejected, see #18999

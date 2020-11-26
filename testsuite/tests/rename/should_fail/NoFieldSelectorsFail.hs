@@ -18,3 +18,7 @@ foo3 :: Foo
 foo3 = foo1 { foo = 4 } -- update
 
 bar1 = bar0 { foo = 1 }
+
+bar = undefined
+
+foo4 = foo1 { bar = "" } -- currently rejected, see #18999
