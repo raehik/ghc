@@ -119,18 +119,24 @@ unknownNameSuggestions_ where_look dflags hpt curr_mod global_env local_env
     extensionSuggestions tried_rdr_name $$
     fieldSelectorSuggestions global_env tried_rdr_name
 
+-- | When the name is in scope as field whose selector has been suppressed by
+-- NoFieldSelectors, display a helpful message explaining this.
 fieldSelectorSuggestions :: GlobalRdrEnv -> RdrName -> SDoc
 fieldSelectorSuggestions global_env tried_rdr_name
-  = case filter isNoFieldSelectorGRE $ lookupGRE_RdrName' IncludeFieldsWithoutSelectors tried_rdr_name global_env of
-    gre : _ -> text "NB:"
-      <+> ppr tried_rdr_name
-      <+> whose gre
-      <+> text "field selector that has been suppressed by NoFieldSelectors"
-    _ -> Outputable.empty
+  | null gres = Outputable.empty
+  | otherwise = text "NB:"
+      <+> quotes (ppr tried_rdr_name)
+      <+> text "is a field selector" <+> whose
+      $$ text "that has been suppressed by NoFieldSelectors"
   where
-    whose gre = case gre_par gre of
-                  NoParent -> text "is a"
-                  ParentIs parent -> text "is" <+> ppr parent <> text "'s"
+    gres = filter isNoFieldSelectorGRE $
+               lookupGRE_RdrName' IncludeFieldsWithoutSelectors tried_rdr_name global_env
+    parents = [ parent | ParentIs parent <- map gre_par gres ]
+
+    -- parents may be empty if this is a pattern synonym field without a selector
+    whose | null parents = empty
+          | otherwise    = text "belonging to the type" <> plural parents
+                             <+> pprQuotedList parents
 
 similarNameSuggestions :: WhereLooking -> DynFlags
                         -> GlobalRdrEnv -> LocalRdrEnv
