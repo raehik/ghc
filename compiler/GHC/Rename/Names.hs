@@ -762,7 +762,7 @@ getLocalNonValBinders fixity_env
              ; let fld_env = case unLoc tc_decl of
                      DataDecl { tcdDataDefn = d } -> mk_fld_env d names flds'
                      _                            -> []
-             ; return (AvailTC main_name names flds', fld_env) }
+             ; return (availTC main_name names flds', fld_env) }
 
 
     -- Calculate the mapping from constructor names to fields, which
@@ -837,7 +837,7 @@ getLocalNonValBinders fixity_env
              ; let (bndrs, flds) = hsDataFamInstBinders dfid
              ; sub_names <- mapM newTopSrcBinder bndrs
              ; flds' <- mapM (newRecordSelector overload_ok sub_names) flds
-             ; let avail    = AvailTC (unLoc main_name) sub_names flds'
+             ; let avail    = availTC (unLoc main_name) sub_names flds'
                                   -- main_name is not bound here!
                    fld_env  = mk_fld_env (feqn_rhs ti_decl) sub_names flds'
              ; return (avail, fld_env) }
@@ -976,8 +976,8 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
     -- 'combine' may also be called for pattern synonyms which appear both
     -- unassociated and associated (#11959)
     combine :: (Child, AvailInfo, Maybe Name) -> (Child, AvailInfo, Maybe Name) -> (Child, AvailInfo, Maybe Name)
-    combine (ChildName name1, a1@(AvailTC p1 _ _), mb1)
-            (ChildName name2, a2@(AvailTC p2 _ _), mb2)
+    combine (ChildName name1, a1@(AvailTC p1 _), mb1)
+            (ChildName name2, a2@(AvailTC p2 _), mb2)
       = ASSERT2( name1 == name2 && isNothing mb1 && isNothing mb2
                , ppr name1 <+> ppr name2 <+> ppr mb1 <+> ppr mb2 )
         if p1 == name1 then (ChildName name1, a1, Just p2)
@@ -1055,11 +1055,8 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                           Avail {}                     -- e.g. f(..)
                             -> [DodgyImport $ ieWrappedName tc]
 
-                          AvailFL {}                   -- e.g. f(..)
-                            -> [DodgyImport $ ieWrappedName tc]
-
-                          AvailTC _ subs fs
-                            | null (drop 1 subs) && null fs -- e.g. T(..) where T is a synonym
+                          AvailTC _ subs
+                            | null (drop 1 subs) -- e.g. T(..) where T is a synonym
                             -> [DodgyImport $ ieWrappedName tc]
 
                             | not (is_qual decl_spec)  -- e.g. import M( T(..) )
@@ -1070,13 +1067,12 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
 
                 renamed_ie = IEThingAll noExtField (L l (replaceWrappedName tc name))
                 sub_avails = case avail of
-                               Avail {}              -> []
-                               AvailFL {}            -> []
-                               AvailTC name2 subs fs -> [(renamed_ie, AvailTC name2 (subs \\ [name]) fs)]
+                               Avail {}           -> []
+                               AvailTC name2 subs -> [(renamed_ie, AvailTC name2 (subs \\ [ChildName name]))]
             case mb_parent of
               Nothing     -> return ([(renamed_ie, avail)], warns)
                              -- non-associated ty/cls
-              Just parent -> return ((renamed_ie, AvailTC parent [name] []) : sub_avails, warns)
+              Just parent -> return ((renamed_ie, AvailTC parent [ChildName name]) : sub_avails, warns)
                              -- associated type
 
         IEThingAbs _ (L l tc')
@@ -1100,19 +1096,9 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
            (name, avail, mb_parent)
                <- lookup_name (IEThingAbs noExtField ltc) (ieWrappedName rdr_tc)
 
-           let (ns,subflds) = case avail of
-                                AvailTC _ ns' subflds' -> (ns',subflds')
-                                Avail _                -> panic "filterImports"
-                                AvailFL {}             -> pprPanic "filterImports" (ppr avail)
-
            -- Look up the children in the sub-names of the parent
-           let subnames = case ns of   -- The tc is first in ns,
-                            [] -> []   -- if it is there at all
-                                       -- See the AvailTC Invariant in
-                                       -- GHC.Types.Avail
-                            (n1:ns1) | n1 == name -> ns1
-                                     | otherwise  -> ns
-           case lookupChildren (map ChildName subnames ++ map ChildField subflds) rdr_ns of
+           let subnames = availSubordinateChildren avail
+           case lookupChildren subnames rdr_ns of
 
              Failed rdrs -> failLookupWith (BadImport (IEThingWith xt ltc wc rdrs []))
                                 -- We are trying to import T( a,b,c,d ), and failed
@@ -1126,7 +1112,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                  Nothing
                    -> return ([(IEThingWith noExtField (L l name') wc childnames'
                                                                  childflds,
-                               AvailTC name (name:map unLoc childnames) (map unLoc childflds))],
+                               availTC name (name:map unLoc childnames) (map unLoc childflds))],
                               [])
                    where name' = replaceWrappedName rdr_tc name
                          childnames' = map to_ie_post_rn childnames
@@ -1135,10 +1121,10 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                  Just parent
                    -> return ([(IEThingWith noExtField (L l name') wc childnames'
                                                            childflds,
-                                AvailTC name (map unLoc childnames) (map unLoc childflds)),
+                                availTC name (map unLoc childnames) (map unLoc childflds)),
                                (IEThingWith noExtField (L l name') wc childnames'
                                                            childflds,
-                                AvailTC parent [name] [])],
+                                availTC parent [name] [])],
                               [])
                    where name' = replaceWrappedName rdr_tc name
                          childnames' = map to_ie_post_rn childnames
@@ -1152,7 +1138,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
           = (IEThingAbs noExtField (L l (replaceWrappedName tc n)), trimAvail av n)
         mkIEThingAbs tc l (n, _,  Just parent)
           = (IEThingAbs noExtField (L l (replaceWrappedName tc n))
-             , AvailTC parent [n] [])
+             , availTC parent [n] [])
 
         handle_bad_import m = catchIELookup m $ \err -> case err of
           BadImport ie | want_hiding -> return ([], [BadImportW ie])
@@ -1635,16 +1621,14 @@ getMinimalImports = fmap combine . mapM mk_minimal
     -- The main trick here is that if we're importing all the constructors
     -- we want to say "T(..)", but if we're importing only a subset we want
     -- to say "T(A,B,C)".  So we have to find out what the module exports.
-    to_ie _ (Avail n)
-       = [IEVar noExtField (to_ie_post_rn $ noLoc n)]
-    to_ie _ (AvailFL fl) -- Note [Overloaded field import]
-       = [IEVar noExtField (to_ie_post_rn $ noLoc (fieldLabelPrintableName fl))]
-    to_ie _ (AvailTC n [m] [])
-       | n==m = [IEThingAbs noExtField (to_ie_post_rn $ noLoc n)]
-    to_ie iface (AvailTC n ns fs)
-      = case [(xs,gs) |  AvailTC x xs gs <- mi_exports iface
+    to_ie _ (Avail c)  -- Note [Overloaded field import]
+       = [IEVar noExtField (to_ie_post_rn $ noLoc (childPrintableName c))]
+    to_ie _ avail@(AvailTC n [_])  -- Exporting the main decl and nothing else
+       | availExportsDecl avail = [IEThingAbs noExtField (to_ie_post_rn $ noLoc n)]
+    to_ie iface (AvailTC n cs)
+      = case [xs | avail@(AvailTC x xs) <- mi_exports iface
                  , x == n
-                 , x `elem` xs    -- Note [Partial export]
+                 , availExportsDecl avail  -- Note [Partial export]
                  ] of
            [xs] | all_used xs -> [IEThingAll noExtField (to_ie_post_rn $ noLoc n)]
                 | otherwise   ->
@@ -1660,12 +1644,9 @@ getMinimalImports = fmap combine . mapM mk_minimal
                                 (map (to_ie_post_rn . noLoc) (filter (/= n) ns))
                                 (map noLoc fs)]
         where
+          (ns, fs) = partitionChildren cs
 
-          fld_lbls = map flLabel fs
-
-          all_used (avail_occs, avail_flds)
-              = all (`elem` ns) avail_occs
-                    && all (`elem` fld_lbls) (map flLabel avail_flds)
+          all_used avail_cs = all (`elem` cs) avail_cs
 
           all_non_overloaded = all (not . flIsOverloaded)
 
@@ -1744,7 +1725,7 @@ Then the minimal import for module B is
 not
    import A( C( op ) )
 which we would usually generate if C was exported from B.  Hence
-the (x `elem` xs) test when deciding what to generate.
+the availExportsDecl test when deciding what to generate.
 
 
 Note [Overloaded field import]
@@ -1799,9 +1780,8 @@ ambiguousImportItemErr rdr avails
   = hang (text "Ambiguous name" <+> quotes (ppr rdr) <+> text "in import item. It could refer to:")
        2 (vcat (map ppr_avail avails))
   where
-    ppr_avail (AvailTC parent _ _) = ppr parent <> parens (ppr rdr)
-    ppr_avail (Avail name)         = ppr name
-    ppr_avail (AvailFL fl)         = ppr fl
+    ppr_avail (AvailTC parent _) = ppr parent <> parens (ppr rdr)
+    ppr_avail (Avail name)       = ppr name
 
 pprImpDeclSpec :: ModIface -> ImpDeclSpec -> SDoc
 pprImpDeclSpec iface decl_spec =
@@ -1844,13 +1824,12 @@ badImportItemErr iface decl_spec ie avails
       Just con -> badImportItemErrDataCon (availOccName con) iface decl_spec ie
       Nothing  -> badImportItemErrStd iface decl_spec ie
   where
-    checkIfDataCon (AvailTC _ ns _) =
-      case find (\n -> importedFS == nameOccNameFS n) ns of
-        Just n  -> isDataConName n
+    checkIfDataCon (AvailTC _ ns) =
+      case find (\n -> importedFS == occNameFS (occName n)) ns of
+        Just n  -> isDataConName (childName n)
         Nothing -> False
     checkIfDataCon _ = False
-    availOccName = nameOccName . availName
-    nameOccNameFS = occNameFS . nameOccName
+    availOccName = occName . availChild
     importedFS = occNameFS . rdrNameOcc $ ieName ie
 
 illegalImportItemErr :: SDoc

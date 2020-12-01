@@ -659,9 +659,7 @@ gre_name gre = case gre_child gre of
 -- | A Name for the GRE's child suitable for output to the user.  Its OccName
 -- will be the greOccName.
 grePrintableName :: GlobalRdrElt -> Name
-grePrintableName gre = case gre_child gre of
-    ChildName name -> name
-    ChildField fl  -> fieldLabelPrintableName fl
+grePrintableName = childPrintableName . gre_child
 
 -- | The SrcSpan of the name pointed to by the GRE.
 greDefinitionSrcSpan :: GlobalRdrElt -> SrcSpan
@@ -703,15 +701,13 @@ greSrcSpan gre@(GRE { gre_lcl = lcl, gre_imp = iss } )
   | otherwise     = pprPanic "greSrcSpan" (ppr gre)
 
 mkParent :: Name -> AvailInfo -> Parent
-mkParent _ (Avail _)                   = NoParent
-mkParent _ (AvailFL _)                 = NoParent
-mkParent n (AvailTC m _ _) | n == m    = NoParent
-                           | otherwise = ParentIs m
+mkParent _ (Avail _)                 = NoParent
+mkParent n (AvailTC m _) | n == m    = NoParent
+                         | otherwise = ParentIs m
 
 availParent :: AvailInfo -> Parent
-availParent (AvailTC m _ _) = ParentIs m
-availParent (Avail {})      = NoParent
-availParent (AvailFL {})    = NoParent
+availParent (AvailTC m _) = ParentIs m
+availParent (Avail {})    = NoParent
 
 
 greParent_maybe :: GlobalRdrElt -> Maybe Name
@@ -749,30 +745,25 @@ gresToAvailInfo gres
         -- need to maintain the invariant that the parent is first.
         --
         -- We also use the invariant that `k` is not already in `ns`.
-        insertChildIntoChildren :: Name -> [Name] -> Name -> [Name]
+        insertChildIntoChildren :: Name -> [Child] -> Child -> [Child]
         insertChildIntoChildren _ [] k = [k]
         insertChildIntoChildren p (n:ns) k
-          | p == k = k:n:ns
+          | ChildName p == k = k:n:ns
           | otherwise = n:k:ns
 
         comb :: GlobalRdrElt -> AvailInfo -> AvailInfo
-        comb _ (Avail n) = Avail n -- Duplicated name, should not happen
-        comb _ (AvailFL fl) = AvailFL fl
-        comb gre (AvailTC m ns fls)
-          = case (gre_par gre, gre_child gre) of
-              (NoParent, ChildName me)    -> AvailTC m (me:ns) fls -- Not sure this ever happens
-              (NoParent, ChildField fl)   -> AvailTC m ns (fl:fls)
-              (ParentIs {}, ChildName me) -> AvailTC m (insertChildIntoChildren m ns me) fls
-              (ParentIs {}, ChildField fl) -> AvailTC m ns (fl:fls)
+        comb _   (Avail n) = Avail n -- Duplicated name, should not happen
+        comb gre (AvailTC m ns)
+          = case gre_par gre of
+              NoParent    -> AvailTC m (gre_child gre:ns) -- Not sure this ever happens
+              ParentIs {} -> AvailTC m (insertChildIntoChildren m ns (gre_child gre))
 
 availFromGRE :: GlobalRdrElt -> AvailInfo
 availFromGRE (GRE { gre_child = child, gre_par = parent })
-  = case (parent, child) of
-      (ParentIs p, ChildName me)       -> AvailTC p [me] []
-      (ParentIs p, ChildField fl)      -> AvailTC p [] [fl]
-      (NoParent, ChildName me) | isTyConName me -> AvailTC me [me] []
-                               | otherwise      -> avail   me
-      (NoParent, ChildField fl) -> AvailFL fl
+  = case parent of
+      ParentIs p -> AvailTC p [child]
+      NoParent | ChildName me <- child, isTyConName me -> AvailTC me [child]
+               | otherwise -> Avail child
 
 emptyGlobalRdrEnv :: GlobalRdrEnv
 emptyGlobalRdrEnv = emptyOccEnv

@@ -2279,7 +2279,7 @@ extendPatSynEnv val_decls local_fix_env thing = do {
    ; let pat_syn_bndrs = concat [ name: map flSelector fields
                                 | (name, fields) <- names_with_fls ]
    ; let avails = map avail (map fst names_with_fls)
-               ++ map AvailFL (concatMap snd names_with_fls)
+               ++ map availField (concatMap snd names_with_fls)
    ; (gbl_env, lcl_env) <- extendGlobalRdrEnvRn avails local_fix_env
 
    ; let field_env' = extendNameEnvList (tcg_field_env gbl_env) names_with_fls

@@ -246,13 +246,9 @@ exports_from_avail Nothing rdr_env _imports _this_mod
     -- Even though we don't check whether this is actually a data family
     -- only data families can locally define subordinate things (`ns` here)
     -- without locally defining (and instead importing) the parent (`n`)
-    fix_faminst (AvailTC n ns flds) =
-      let new_ns =
-            case ns of
-              [] -> [n]
-              (p:_) -> if p == n then ns else n:ns
-      in AvailTC n new_ns flds
-
+    fix_faminst avail@(AvailTC n ns)
+      | availExportsDecl avail = avail
+      | otherwise = AvailTC n (ChildName n:ns)
     fix_faminst avail = avail
 
 
@@ -353,7 +349,7 @@ exports_from_avail (Just (L _ rdr_items)) rdr_env imports this_mod
             (n, avail, flds) <- lookup_ie_all ie n'
             let name = unLoc n
             return (IEThingAll noExtField (replaceLWrappedName n' (unLoc n))
-                   , AvailTC name (name:avail) flds)
+                   , availTC name (name:avail) flds)
 
 
     lookup_ie ie@(IEThingWith _ l wc sub_rdrs _)
@@ -367,7 +363,7 @@ exports_from_avail (Just (L _ rdr_items)) rdr_env imports this_mod
             let name = unLoc lname
             return (IEThingWith noExtField (replaceLWrappedName l name) wc subs
                                 (flds ++ (map noLoc all_flds)),
-                    AvailTC name (name : avails ++ all_avail)
+                    availTC name (name : avails ++ all_avail)
                                  (map unLoc flds ++ all_flds))
 
 
