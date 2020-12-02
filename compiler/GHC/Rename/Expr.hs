@@ -136,11 +136,12 @@ rnExpr (HsVar _ (L l v))
 
               | otherwise
               -> finishHsVar (L l name) ;
-            Just (LookupOccFields (s NE.:| [])) -> -- AMG TODO review this
-              return ( HsRecFld noExtField (Unambiguous (flSelector s) (L l v) ), unitFV (flSelector s)) ;
-           Just (LookupOccFields fs@(_ NE.:| _:_)) ->
-              return ( HsRecFld noExtField (Ambiguous noExtField (L l v))
-                     , mkFVs $ NE.toList $ fmap flSelector fs); } }
+            Just (LookupOccFields (f NE.:| fs)) ->
+              let sel_name = flSelector f
+                  (mkAmbiguousFieldOcc, fvs)
+                      | null fs   = (Unambiguous sel_name, unitFV sel_name)
+                      | otherwise = (Ambiguous noExtField, emptyFVs)
+              in return ( HsRecFld noExtField (mkAmbiguousFieldOcc (L l v) ), fvs) } }
 
 rnExpr (HsIPVar x v)
   = return (HsIPVar x v, emptyFVs)
