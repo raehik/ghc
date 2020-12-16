@@ -1033,6 +1033,7 @@ StrictAnal.addStrictnessInfoToTopId
 -}
 
 callSiteInline :: DynFlags
+               -> Int                   -- Case depth
                -> Id                    -- The Id
                -> Bool                  -- True <=> unfolding is active
                -> Bool                  -- True if there are no arguments at all (incl type args)
@@ -1075,7 +1076,7 @@ instance Outputable CallCtxt where
   ppr DiscArgCtxt = text "DiscArgCtxt"
   ppr RuleArgCtxt = text "RuleArgCtxt"
 
-callSiteInline dflags id active_unfolding lone_variable arg_infos cont_info
+callSiteInline dflags case_depth id active_unfolding lone_variable arg_infos cont_info
   = case idUnfolding id of
       -- idUnfolding checks for loop-breakers, returning NoUnfolding
       -- Things with an INLINE pragma may have an unfolding *and*
@@ -1083,7 +1084,7 @@ callSiteInline dflags id active_unfolding lone_variable arg_infos cont_info
         CoreUnfolding { uf_tmpl = unf_template
                       , uf_is_work_free = is_wf
                       , uf_guidance = guidance, uf_expandable = is_exp }
-          | active_unfolding -> tryUnfolding dflags id lone_variable
+          | active_unfolding -> tryUnfolding dflags case_depth id lone_variable
                                     arg_infos cont_info unf_template
                                     is_wf is_exp guidance
           | otherwise -> traceInline dflags id "Inactive unfolding:" (ppr id) Nothing
@@ -1110,10 +1111,10 @@ traceInline dflags inline_id str doc result
       = False
 {-# INLINE traceInline #-} -- see Note [INLINE conditional tracing utilities]
 
-tryUnfolding :: DynFlags -> Id -> Bool -> [ArgSummary] -> CallCtxt
+tryUnfolding :: DynFlags -> Int -> Id -> Bool -> [ArgSummary] -> CallCtxt
              -> CoreExpr -> Bool -> Bool -> UnfoldingGuidance
              -> Maybe CoreExpr
-tryUnfolding dflags id lone_variable
+tryUnfolding dflags case_depth id lone_variable
              arg_infos cont_info unf_template
              is_wf is_exp guidance
  = case guidance of
@@ -1138,8 +1139,12 @@ tryUnfolding dflags id lone_variable
         -> traceInline dflags id str (mk_doc some_benefit extra_doc False) Nothing
         where
           some_benefit = calc_some_benefit (length arg_discounts)
-          extra_doc = text "discounted size =" <+> int discounted_size
-          discounted_size = size - discount
+          extra_doc = vcat [ text "case depth =" <+> int case_depth
+                           , text "inflated size =" <+> int inflated_size
+                           , text "discounted size =" <+> int discounted_size ]
+          inflated_size | case_depth <= 2 = size
+                        | otherwise       = size * (case_depth - 1)
+          discounted_size = inflated_size - discount
           small_enough = discounted_size <= unfoldingUseThreshold uf_opts
           discount = computeDiscount arg_discounts res_discount arg_infos cont_info
 
