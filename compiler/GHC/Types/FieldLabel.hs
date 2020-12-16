@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveTraversable  #-}
+{-# LANGUAGE FlexibleContexts   #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 {-
 %
@@ -66,8 +68,7 @@ Of course, datatypes with no constructors cannot have any fields.
 module GHC.Types.FieldLabel
    ( FieldLabelString
    , FieldLabelEnv
-   , FieldLbl(..)
-   , FieldLabel
+   , FieldLabel(..)
    , fieldSelectorOccName
    , fieldLabelPrintableName
    )
@@ -93,25 +94,26 @@ type FieldLabelString = FastString
 type FieldLabelEnv = DFastStringEnv FieldLabel
 
 
-type FieldLabel = FieldLbl Name
-
 -- | Fields in an algebraic record type; see Note [FieldLabel].
-data FieldLbl a = FieldLabel {
+data FieldLabel = FieldLabel {
       flLabel        :: FieldLabelString, -- ^ User-visible label of the field
       flIsOverloaded :: Bool,             -- ^ Was DuplicateRecordFields on
                                           --   in the defining module for this datatype?
-      flSelector     :: a                 -- ^ Record selector function
+      flSelector     :: Name              -- ^ Record selector function
     }
-  deriving (Eq, Functor, Foldable, Traversable)
-deriving instance Data a => Data (FieldLbl a)
+  deriving (Data, Eq)
 
-instance HasOccName (FieldLbl a) where
+instance HasOccName FieldLabel where
   occName = mkVarOccFS . flLabel
 
-instance Outputable a => Outputable (FieldLbl a) where
+instance Outputable FieldLabel where
     ppr fl = ppr (flLabel fl) <> whenPprDebug (braces (ppr (flSelector fl)))
 
-instance Binary a => Binary (FieldLbl a) where
+-- | We need the @Binary Name@ constraint here even though there is an instance
+-- defined in "GHC.Types.Name", because the we have a SOURCE import, so the
+-- instance is not in scope.  And the instance cannot be added to Name.hs-boot
+-- because "GHC.Utils.Binary" itself depends on "GHC.Types.Name".
+instance Binary Name => Binary FieldLabel where
     put_ bh (FieldLabel aa ab ac) = do
         put_ bh aa
         put_ bh ab

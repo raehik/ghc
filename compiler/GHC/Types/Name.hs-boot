@@ -3,13 +3,16 @@ module GHC.Types.Name (
     module GHC.Types.Name.Occurrence
 ) where
 
-import GHC.Prelude ()
+import GHC.Prelude (Eq)
 import {-# SOURCE #-} GHC.Types.Name.Occurrence
 import GHC.Types.Unique
 import GHC.Utils.Outputable
+import Data.Data (Data)
 
 data Name
 
+instance Eq Name
+instance Data Name
 instance Uniquable Name
 instance Outputable Name
 
