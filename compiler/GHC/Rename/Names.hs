@@ -1092,8 +1092,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                   return ([mkIEThingAbs tc' l nameAvail]
                          , [])
 
-        IEThingWith xt ltc@(L l rdr_tc) wc rdr_ns rdr_fs ->
-          ASSERT2(null rdr_fs, ppr rdr_fs) do
+        IEThingWith xt ltc@(L l rdr_tc) wc rdr_ns -> do
            (name, avail, mb_parent)
                <- lookup_name (IEThingAbs noExtField ltc) (ieWrappedName rdr_tc)
 
@@ -1101,7 +1100,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
            let subnames = availSubordinateChildren avail
            case lookupChildren subnames rdr_ns of
 
-             Failed rdrs -> failLookupWith (BadImport (IEThingWith xt ltc wc rdrs []))
+             Failed rdrs -> failLookupWith (BadImport (IEThingWith xt ltc wc rdrs))
                                 -- We are trying to import T( a,b,c,d ), and failed
                                 -- to find 'b' and 'd'.  So we make up an import item
                                 -- to report as failing, namely T( b, d ).
@@ -1111,8 +1110,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                case mb_parent of
                  -- non-associated ty/cls
                  Nothing
-                   -> return ([(IEThingWith noExtField (L l name') wc childnames'
-                                                                 childflds,
+                   -> return ([(IEThingWith childflds (L l name') wc childnames',
                                availTC name (name:map unLoc childnames) (map unLoc childflds))],
                               [])
                    where name' = replaceWrappedName rdr_tc name
@@ -1120,11 +1118,9 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                          -- childnames' = postrn_ies childnames
                  -- associated ty
                  Just parent
-                   -> return ([(IEThingWith noExtField (L l name') wc childnames'
-                                                           childflds,
+                   -> return ([(IEThingWith childflds (L l name') wc childnames',
                                 availTC name (map unLoc childnames) (map unLoc childflds)),
-                               (IEThingWith noExtField (L l name') wc childnames'
-                                                           childflds,
+                               (IEThingWith childflds (L l name') wc childnames',
                                 availTC parent [name] [])],
                               [])
                    where name' = replaceWrappedName rdr_tc name
@@ -1450,7 +1446,7 @@ findImportUsage imports used_gres
         add_unused (IEVar _ n)      acc = add_unused_name (lieWrappedName n) acc
         add_unused (IEThingAbs _ n) acc = add_unused_name (lieWrappedName n) acc
         add_unused (IEThingAll _ n) acc = add_unused_all  (lieWrappedName n) acc
-        add_unused (IEThingWith _ p wc ns fs) acc =
+        add_unused (IEThingWith fs p wc ns) acc =
           add_wc_all (add_unused_with pn xs acc)
           where pn = lieWrappedName p
                 xs = map lieWrappedName ns ++ map (flSelector . unLoc) fs
@@ -1633,17 +1629,15 @@ getMinimalImports = fmap combine . mapM mk_minimal
                  ] of
            [xs] | all_used xs -> [IEThingAll noExtField (to_ie_post_rn $ noLoc n)]
                 | otherwise   ->
-                   [IEThingWith noExtField (to_ie_post_rn $ noLoc n) NoIEWildcard
-                                (map (to_ie_post_rn . noLoc) (filter (/= n) ns))
-                                (map noLoc fs)]
+                   [IEThingWith (map noLoc fs) (to_ie_post_rn $ noLoc n) NoIEWildcard
+                                (map (to_ie_post_rn . noLoc) (filter (/= n) ns))]
                                           -- Note [Overloaded field import]
            _other | all_non_overloaded fs
                            -> map (IEVar noExtField . to_ie_post_rn_var . noLoc) $ ns
                                  ++ map flSelector fs
                   | otherwise ->
-                      [IEThingWith noExtField (to_ie_post_rn $ noLoc n) NoIEWildcard
-                                (map (to_ie_post_rn . noLoc) (filter (/= n) ns))
-                                (map noLoc fs)]
+                      [IEThingWith (map noLoc fs) (to_ie_post_rn $ noLoc n) NoIEWildcard
+                                (map (to_ie_post_rn . noLoc) (filter (/= n) ns))]
         where
           (ns, fs) = partitionChildren cs
 

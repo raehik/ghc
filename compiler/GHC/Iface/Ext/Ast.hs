@@ -2008,7 +2008,7 @@ instance ToHie (IEContext (Located (IE GhcRn))) where
       IEThingAll _ n ->
         [ toHie $ IEC c n
         ]
-      IEThingWith _ n _ ns flds ->
+      IEThingWith flds n _ ns ->
         [ toHie $ IEC c n
         , toHie $ map (IEC c) ns
         , toHie $ map (IEC c) flds

@@ -352,7 +352,7 @@ exports_from_avail (Just (L _ rdr_items)) rdr_env imports this_mod
                    , availTC name (name:avail) flds)
 
 
-    lookup_ie ie@(IEThingWith _ l wc sub_rdrs _)
+    lookup_ie ie@(IEThingWith _ l wc sub_rdrs)
         = do
             (lname, subs, avails, flds)
               <- addExportErrCtxt ie $ lookup_ie_with l sub_rdrs
@@ -361,8 +361,8 @@ exports_from_avail (Just (L _ rdr_items)) rdr_env imports this_mod
                 NoIEWildcard -> return (lname, [], [])
                 IEWildcard _ -> lookup_ie_all ie l
             let name = unLoc lname
-            return (IEThingWith noExtField (replaceLWrappedName l name) wc subs
-                                (flds ++ (map noLoc all_flds)),
+            let flds' = flds ++ (map noLoc all_flds)
+            return (IEThingWith flds' (replaceLWrappedName l name) wc subs,
                     availTC name (name : avails ++ all_avail)
                                  (map unLoc flds ++ all_flds))
 
