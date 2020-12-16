@@ -68,7 +68,7 @@ module GHC.Types.FieldLabel
    , FieldLabelEnv
    , FieldLbl(..)
    , FieldLabel
-   , mkFieldLabelOccs
+   , fieldSelectorOccName
    , fieldLabelPrintableName
    )
 where
@@ -127,14 +127,12 @@ instance Binary a => Binary (FieldLbl a) where
 -- and the name of the first data constructor of the type, to support
 -- duplicate record field names.
 -- See Note [Why selector names include data constructors].
-mkFieldLabelOccs :: FieldLabelString -> OccName -> Bool -> FieldLbl OccName
-mkFieldLabelOccs lbl dc is_overloaded
-  = FieldLabel { flLabel = lbl, flIsOverloaded = is_overloaded
-               , flSelector = sel_occ }
+fieldSelectorOccName :: FieldLabelString -> OccName -> Bool -> OccName
+fieldSelectorOccName lbl dc is_overloaded
+  | is_overloaded = mkRecFldSelOcc str
+  | otherwise     = mkVarOccFS lbl
   where
     str     = ":" ++ unpackFS lbl ++ ":" ++ occNameString dc
-    sel_occ | is_overloaded = mkRecFldSelOcc str
-            | otherwise     = mkVarOccFS lbl
 
 -- | Undo the name mangling described in Note [FieldLabel] to produce a Name
 -- that has the user-visible OccName (but the selector's unique).  This should

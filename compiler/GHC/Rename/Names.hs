@@ -850,10 +850,12 @@ newRecordSelector :: Bool -> [Name] -> LFieldOcc GhcPs -> RnM FieldLabel
 newRecordSelector _ [] _ = error "newRecordSelector: datatype has no constructors!"
 newRecordSelector overload_ok (dc:_) (L loc (FieldOcc _ (L _ fld)))
   = do { selName <- newTopSrcBinder $ L loc $ field
-       ; return $ qualFieldLbl { flSelector = selName } }
+       ; return $ FieldLabel { flLabel = fieldLabelString
+                             , flIsOverloaded = overload_ok
+                             , flSelector = selName } }
   where
-    fieldOccName = occNameFS $ rdrNameOcc fld
-    qualFieldLbl = mkFieldLabelOccs fieldOccName (nameOccName dc) overload_ok
+    fieldLabelString = occNameFS $ rdrNameOcc fld
+    selOccName = fieldSelectorOccName fieldLabelString (nameOccName dc) overload_ok
     field | isExact fld = fld
               -- use an Exact RdrName as is to preserve the bindings
               -- of an already renamer-resolved field and its use
@@ -861,7 +863,7 @@ newRecordSelector overload_ok (dc:_) (L loc (FieldOcc _ (L _ fld)))
               -- selectors in Template Haskell. See Note [Binders in
               -- Template Haskell] in "GHC.ThToHs" and Note [Looking up
               -- Exact RdrNames] in "GHC.Rename.Env".
-          | otherwise   = mkRdrUnqual (flSelector qualFieldLbl)
+          | otherwise   = mkRdrUnqual selOccName
 
 {-
 Note [Looking up family names in family instances]
@@ -996,8 +998,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
     lookup_name ie rdr
        | isQual rdr              = failLookupWith (QualImportError rdr)
        | Just succ <- mb_success = case nameEnvElts succ of
-                                     [(ChildName n,a,x)] -> return (n, a, x)
-                                     [(ChildField fl,a,x)] -> return (flSelector fl, a, x)
+                                     [(c,a,x)] -> return (childName c, a, x)
                                      xs -> failLookupWith (AmbiguousImport rdr (map sndOf3 xs))
        | otherwise               = failLookupWith (BadImport ie)
       where
