@@ -1244,23 +1244,29 @@ data RecordPatSynField pass
 
 {-
 Note [Record PatSyn Fields]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Consider the following two pattern synonyms.
 
-pattern P x y = ([x,True], [y,'v'])
-pattern Q{ x, y } =([x,True], [y,'v'])
+  pattern P x y = ([x,True], [y,'v'])
+  pattern Q{ x, y } =([x,True], [y,'v'])
 
 In P, we just have two local binders, x and y.
 
 In Q, we have local binders but also top-level record selectors
-x :: ([Bool], [Char]) -> Bool and similarly for y.
+  x :: ([Bool], [Char]) -> Bool
+  y :: ([Bool], [Char]) -> Char
+
+Both are recorded in the `RecordPatSynField`s for `x` and `y`:
+* recordPatSynField: the top-level record selector
+* recordPatSynPatVar: the local `x`, bound only in the RHS of the pattern synonym.
 
 It would make sense to support record-like syntax
 
-pattern Q{ x=x1, y=y1 } = ([x1,True], [y1,'v'])
+  pattern Q{ x=x1, y=y1 } = ([x1,True], [y1,'v'])
 
-when we have a different name for the local and top-level binder
-the distinction between the two names clear
+when we have a different name for the local and top-level binder,
+making the distinction between the two names clear.
 
 -}
 instance Outputable (RecordPatSynField a) where
