@@ -546,7 +546,7 @@ finish_ambiguous_selector lr@(L _ rdr) parent_type
            Just gre ->
 
     do { addUsedGRE True gre
-       ; return (gre_name gre) } } } } }
+       ; return (greInternalName gre) } } } } }
 
 -- This field name really is ambiguous, so add a suitable "ambiguous
 -- occurrence" error, then give up.
@@ -597,10 +597,10 @@ lookupParents rdr
        ; mapM lookupParent gres }
   where
     lookupParent :: GlobalRdrElt -> RnM (RecSelParent, GlobalRdrElt)
-    lookupParent gre = do { id <- tcLookupId (gre_name gre)
+    lookupParent gre = do { id <- tcLookupId (greInternalName gre)
                           ; case recordSelectorTyCon_maybe id of
                               Just rstc -> return (rstc, gre)
-                              Nothing -> failWithTc (notSelector (gre_name gre)) }
+                              Nothing -> failWithTc (notSelector (greInternalName gre)) }
 
 
 fieldNotInType :: RecSelParent -> RdrName -> SDoc

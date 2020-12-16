@@ -16,12 +16,12 @@ module GHC.Types.Avail (
     availsToNameSetWithSelectors,
     availsToNameEnv,
     availExportsDecl,
-    availName, availChild,
+    availName, availGreName,
     availNames, availNonFldNames,
     availNamesWithSelectors,
     availFlds,
-    availChildren,
-    availSubordinateChildren,
+    availGreNames,
+    availSubordinateGreNames,
     stableAvailCmp,
     plusAvail,
     trimAvail,
@@ -29,12 +29,13 @@ module GHC.Types.Avail (
     filterAvails,
     nubAvails,
 
-    Child(..),
-    childName,
-    childPrintableName,
-    childSrcSpan,
-    partitionChildren,
-    stableChildCmp,
+    GreName(..),
+    greNameInternal,
+    greNamePrintable,
+    greNameSrcSpan,
+    greNameFieldLabel,
+    partitionGreNames,
+    stableGreNameCmp,
   ) where
 
 import GHC.Prelude
@@ -64,7 +65,7 @@ data AvailInfo
 
   -- | An ordinary identifier in scope, or a field label without a parent type
   -- (see Note [Representing pattern synonym fields in AvailInfo]).
-  = Avail Child
+  = Avail GreName
 
   -- | A type or class in scope
   --
@@ -74,7 +75,7 @@ data AvailInfo
   -- > AvailTC Eq [Eq, ==, \/=]
   | AvailTC
        Name         -- ^ The name of the type or class
-       [Child]      -- ^ The available pieces of type or class
+       [GreName]      -- ^ The available pieces of type or class
                     -- (see Note [Representing fields in AvailInfo]).
 
    deriving ( Eq    -- ^ Used when deciding if the interface has changed
@@ -148,41 +149,41 @@ Thus under -XDuplicateRecordFields -XPatternSynoynms, the declaration
 
 gives rise to the AvailInfo
 
-  Avail (ChildName MkFoo)
-  Avail (ChildField (FieldLabel "f" True $sel:f:MkFoo))
+  Avail (NormalGreName MkFoo)
+  Avail (FieldGreName (FieldLabel "f" True $sel:f:MkFoo))
 
 However, if `f` is bundled with a type constructor `T` by using `T(MkFoo,f)` in
 an export list, then whenever `f` is imported the parent will be `T`,
 represented as
 
-  AvailTC T [ ChildName T
-            , ChildName MkFoo
-            , ChildField (FieldLabel "f" True $sel:f:MkFoo) ]
+  AvailTC T [ NormalGreName T
+            , NormalGreName MkFoo
+            , FieldGreName (FieldLabel "f" True $sel:f:MkFoo) ]
 
 -}
 
 -- | Compare lexicographically
 stableAvailCmp :: AvailInfo -> AvailInfo -> Ordering
-stableAvailCmp (Avail c1)     (Avail c2)     = c1 `stableChildCmp` c2
+stableAvailCmp (Avail c1)     (Avail c2)     = c1 `stableGreNameCmp` c2
 stableAvailCmp (Avail {})     (AvailTC {})   = LT
 stableAvailCmp (AvailTC n ns) (AvailTC m ms) = (n `stableNameCmp` m) `thenCmp`
-                                               (cmpList stableChildCmp ns ms)
+                                               (cmpList stableGreNameCmp ns ms)
 stableAvailCmp (AvailTC {})   (Avail {})     = GT
 
-stableChildCmp :: Child -> Child -> Ordering
-stableChildCmp (ChildName  n1) (ChildName  n2) = n1 `stableNameCmp` n2
-stableChildCmp (ChildName  {}) (ChildField {}) = LT
-stableChildCmp (ChildField f1) (ChildField f2) = flSelector f1 `stableNameCmp` flSelector f2
-stableChildCmp (ChildField {}) (ChildName  {}) = GT
+stableGreNameCmp :: GreName -> GreName -> Ordering
+stableGreNameCmp (NormalGreName n1) (NormalGreName n2) = n1 `stableNameCmp` n2
+stableGreNameCmp (NormalGreName {}) (FieldGreName  {}) = LT
+stableGreNameCmp (FieldGreName  f1) (FieldGreName  f2) = flSelector f1 `stableNameCmp` flSelector f2
+stableGreNameCmp (FieldGreName  {}) (NormalGreName {}) = GT
 
 avail :: Name -> AvailInfo
-avail n = Avail (ChildName n)
+avail n = Avail (NormalGreName n)
 
 availField :: FieldLabel -> AvailInfo
-availField fl = Avail (ChildField fl)
+availField fl = Avail (FieldGreName fl)
 
 availTC :: Name -> [Name] -> [FieldLabel] -> AvailInfo
-availTC n ns fls = AvailTC n (map ChildName ns ++ map ChildField fls)
+availTC n ns fls = AvailTC n (map NormalGreName ns ++ map FieldGreName fls)
 
 
 -- -----------------------------------------------------------------------------
@@ -205,99 +206,99 @@ availsToNameEnv avails = foldr add emptyNameEnv avails
 -- invariant that the parent is first if it appears at all.
 availExportsDecl :: AvailInfo -> Bool
 availExportsDecl (AvailTC ty_name names)
-  | n : _ <- names = ChildName ty_name == n
+  | n : _ <- names = NormalGreName ty_name == n
   | otherwise      = False
 availExportsDecl _ = True
 
 -- | Just the main name made available, i.e. not the available pieces
 -- of type or class brought into scope by the 'AvailInfo'
 availName :: AvailInfo -> Name
-availName (Avail n)     = childName n
+availName (Avail n)     = greNameInternal n
 availName (AvailTC n _) = n
 
-availChild :: AvailInfo -> Child
-availChild (Avail c) = c
-availChild (AvailTC n _) = ChildName n
+availGreName :: AvailInfo -> GreName
+availGreName (Avail c) = c
+availGreName (AvailTC n _) = NormalGreName n
 
 -- | All names made available by the availability information (excluding overloaded selectors)
 availNames :: AvailInfo -> [Name]
 availNames (Avail c) = childNonOverloadedNames c
 availNames (AvailTC _ cs) = concatMap childNonOverloadedNames cs
 
-childNonOverloadedNames :: Child -> [Name]
-childNonOverloadedNames (ChildName n) = [n]
-childNonOverloadedNames (ChildField fl) = [ flSelector fl | not (flIsOverloaded fl) ]
+childNonOverloadedNames :: GreName -> [Name]
+childNonOverloadedNames (NormalGreName n) = [n]
+childNonOverloadedNames (FieldGreName fl) = [ flSelector fl | not (flIsOverloaded fl) ]
 
 -- | All names made available by the availability information (including overloaded selectors)
 availNamesWithSelectors :: AvailInfo -> [Name]
-availNamesWithSelectors (Avail c) = [childName c]
-availNamesWithSelectors (AvailTC _ cs) = map childName cs
+availNamesWithSelectors (Avail c) = [greNameInternal c]
+availNamesWithSelectors (AvailTC _ cs) = map greNameInternal cs
 
 -- | Names for non-fields made available by the availability information
 availNonFldNames :: AvailInfo -> [Name]
-availNonFldNames (Avail (ChildName n))   = [n]
-availNonFldNames (Avail (ChildField {})) = []
+availNonFldNames (Avail (NormalGreName n)) = [n]
+availNonFldNames (Avail (FieldGreName {})) = []
 availNonFldNames (AvailTC _ ns) = mapMaybe f ns
   where
-    f (ChildName n)   = Just n
-    f (ChildField {}) = Nothing
+    f (NormalGreName n) = Just n
+    f (FieldGreName {}) = Nothing
 
 -- | Fields made available by the availability information
 availFlds :: AvailInfo -> [FieldLabel]
-availFlds (Avail c) = maybeToList (childFieldLabel c)
-availFlds (AvailTC _ cs) = mapMaybe childFieldLabel cs
+availFlds (Avail c) = maybeToList (greNameFieldLabel c)
+availFlds (AvailTC _ cs) = mapMaybe greNameFieldLabel cs
 
--- | Children made available by the availability information.
-availChildren :: AvailInfo -> [Child]
-availChildren (Avail c)      = [c]
-availChildren (AvailTC _ cs) = cs
+-- | Names and fields made available by the availability information.
+availGreNames :: AvailInfo -> [GreName]
+availGreNames (Avail c)      = [c]
+availGreNames (AvailTC _ cs) = cs
 
--- | Children made available by the availability information, other than the
--- main decl itself.
-availSubordinateChildren :: AvailInfo -> [Child]
-availSubordinateChildren (Avail {}) = []
-availSubordinateChildren avail@(AvailTC _ ns)
+-- | Names and fields made available by the availability information, other than
+-- the main decl itself.
+availSubordinateGreNames :: AvailInfo -> [GreName]
+availSubordinateGreNames (Avail {}) = []
+availSubordinateGreNames avail@(AvailTC _ ns)
   | availExportsDecl avail = tail ns
   | otherwise              = ns
 
 
 -- | Used where we may have an ordinary name or a record field label.
--- See Note [Children] in GHC.Types.Name.Reader.
-data Child = ChildName  Name
-           | ChildField FieldLabel
-           deriving (Data, Eq)
+-- See Note [GreName] in GHC.Types.Name.Reader.
+data GreName = NormalGreName Name
+             | FieldGreName FieldLabel
+    deriving (Data, Eq)
 
-instance Outputable Child where
-  ppr (ChildName   n) = ppr n
-  ppr (ChildField fl) = ppr fl
+instance Outputable GreName where
+  ppr (NormalGreName n) = ppr n
+  ppr (FieldGreName fl) = ppr fl
 
-instance HasOccName Child where
-  occName (ChildName name) = occName name
-  occName (ChildField fl)  = occName fl
+instance HasOccName GreName where
+  occName (NormalGreName n) = occName n
+  occName (FieldGreName fl) = occName fl
 
-childName :: Child -> Name
-childName (ChildName name) = name
-childName (ChildField fl)  = flSelector fl
+greNameInternal :: GreName -> Name
+greNameInternal (NormalGreName n) = n
+greNameInternal (FieldGreName fl) = flSelector fl
 
 -- | A Name for the child suitable for output to the user.  For fields, the
 -- OccName will be the field label.  See 'fieldLabelPrintableName'.
-childPrintableName :: Child -> Name
-childPrintableName (ChildName name) = name
-childPrintableName (ChildField fl)  = fieldLabelPrintableName fl
+greNamePrintable :: GreName -> Name
+greNamePrintable (NormalGreName n) = n
+greNamePrintable (FieldGreName fl) = fieldLabelPrintableName fl
 
-childSrcSpan :: Child -> SrcSpan
-childSrcSpan (ChildName name) = nameSrcSpan name
-childSrcSpan (ChildField fl)  = nameSrcSpan (flSelector fl)
+greNameSrcSpan :: GreName -> SrcSpan
+greNameSrcSpan (NormalGreName n) = nameSrcSpan n
+greNameSrcSpan (FieldGreName fl) = nameSrcSpan (flSelector fl)
 
-childFieldLabel :: Child -> Maybe FieldLabel
-childFieldLabel (ChildName {})  = Nothing
-childFieldLabel (ChildField fl) = Just fl
+greNameFieldLabel :: GreName -> Maybe FieldLabel
+greNameFieldLabel (NormalGreName {}) = Nothing
+greNameFieldLabel (FieldGreName fl)  = Just fl
 
-partitionChildren :: [Child] -> ([Name], [FieldLabel])
-partitionChildren = partitionEithers . map to_either
+partitionGreNames :: [GreName] -> ([Name], [FieldLabel])
+partitionGreNames = partitionEithers . map to_either
   where
-    to_either (ChildName   n) = Left n
-    to_either (ChildField fl) = Right fl
+    to_either (NormalGreName n) = Left n
+    to_either (FieldGreName fl) = Right fl
 
 
 -- -----------------------------------------------------------------------------
@@ -311,7 +312,7 @@ plusAvail a1@(Avail {})         (Avail {})        = a1
 plusAvail (AvailTC _ [])     a2@(AvailTC {})   = a2
 plusAvail a1@(AvailTC {})       (AvailTC _ []) = a1
 plusAvail (AvailTC n1 (s1:ss1)) (AvailTC n2 (s2:ss2))
-  = case (ChildName n1==s1, ChildName n2==s2) of  -- Maintain invariant the parent is first
+  = case (NormalGreName n1==s1, NormalGreName n2==s2) of  -- Maintain invariant the parent is first
        (True,True)   -> AvailTC n1 (s1 : (ss1 `unionLists` ss2))
        (True,False)  -> AvailTC n1 (s1 : (ss1 `unionLists` (s2:ss2)))
        (False,True)  -> AvailTC n1 (s2 : ((s1:ss1) `unionLists` ss2))
@@ -321,7 +322,7 @@ plusAvail a1 a2 = pprPanic "GHC.Rename.Env.plusAvail" (hsep [ppr a1,ppr a2])
 -- | trims an 'AvailInfo' to keep only a single name
 trimAvail :: AvailInfo -> Name -> AvailInfo
 trimAvail avail@(Avail {})         _ = avail
-trimAvail avail@(AvailTC n ns) m = case find ((== m) . childName) ns of
+trimAvail avail@(AvailTC n ns) m = case find ((== m) . greNameInternal) ns of
     Just c  -> AvailTC n [c]
     Nothing -> pprPanic "trimAvail" (hsep [ppr avail, ppr m])
 
@@ -333,10 +334,10 @@ filterAvails keep avails = foldr (filterAvail keep) [] avails
 filterAvail :: (Name -> Bool) -> AvailInfo -> [AvailInfo] -> [AvailInfo]
 filterAvail keep ie rest =
   case ie of
-    Avail c | keep (childName c) -> ie : rest
+    Avail c | keep (greNameInternal c) -> ie : rest
             | otherwise -> rest
     AvailTC tc cs ->
-        let cs' = filter (keep . childName) cs
+        let cs' = filter (keep . greNameInternal) cs
         in if null cs' then rest else AvailTC tc cs' : rest
 
 
@@ -379,17 +380,17 @@ instance Binary AvailInfo where
                       ac <- get bh
                       return (AvailTC ab ac)
 
-instance Binary Child where
-    put_ bh (ChildName aa) = do
+instance Binary GreName where
+    put_ bh (NormalGreName aa) = do
             putByte bh 0
             put_ bh aa
-    put_ bh (ChildField ab) = do
+    put_ bh (FieldGreName ab) = do
             putByte bh 1
             put_ bh ab
     get bh = do
             h <- getByte bh
             case h of
               0 -> do aa <- get bh
-                      return (ChildName aa)
+                      return (NormalGreName aa)
               _ -> do ab <- get bh
-                      return (ChildField ab)
+                      return (FieldGreName ab)

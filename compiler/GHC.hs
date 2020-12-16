@@ -1352,7 +1352,7 @@ modInfoTyThings minf = typeEnvElts (minf_type_env minf)
 
 modInfoTopLevelScope :: ModuleInfo -> Maybe [Name]
 modInfoTopLevelScope minf
-  = fmap (map gre_name . globalRdrEnvElts) (minf_rdr_env minf)
+  = fmap (map greInternalName . globalRdrEnvElts) (minf_rdr_env minf)
 
 modInfoExports :: ModuleInfo -> [Name]
 modInfoExports minf = concatMap availNames $! minf_exports minf

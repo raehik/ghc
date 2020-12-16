@@ -426,13 +426,13 @@ warnUnusedGREs gres = mapM_ warnUnusedGRE gres
 -- NB the Names must not be the names of record fields!
 warnUnused :: WarningFlag -> [Name] -> RnM ()
 warnUnused flag names =
-    mapM_ (warnUnused1 flag . ChildName) names
+    mapM_ (warnUnused1 flag . NormalGreName) names
 
-warnUnused1 :: WarningFlag -> Child -> RnM ()
+warnUnused1 :: WarningFlag -> GreName -> RnM ()
 warnUnused1 flag child
   = when (reportable child) $
     addUnusedWarning flag
-                     (occName child) (childSrcSpan child)
+                     (occName child) (greNameSrcSpan child)
                      (text $ "Defined but not used" ++ opt_str)
   where
     opt_str = case flag of
@@ -441,8 +441,8 @@ warnUnused1 flag child
 
 warnUnusedGRE :: GlobalRdrElt -> RnM ()
 warnUnusedGRE gre@(GRE { gre_lcl = lcl, gre_imp = is })
-  | lcl       = warnUnused1 Opt_WarnUnusedTopBinds (gre_child gre)
-  | otherwise = when (reportable (gre_child gre)) (mapM_ warn is)
+  | lcl       = warnUnused1 Opt_WarnUnusedTopBinds (gre_name gre)
+  | otherwise = when (reportable (gre_name gre)) (mapM_ warn is)
   where
     occ = greOccName gre
     warn spec = addUnusedWarning Opt_WarnUnusedTopBinds occ span msg
@@ -454,18 +454,18 @@ warnUnusedGRE gre@(GRE { gre_lcl = lcl, gre_imp = is })
 -- | Make a map from selector names to field labels and parent tycon
 -- names, to be used when reporting unused record fields.
 mkFieldEnv :: GlobalRdrEnv -> NameEnv (FieldLabelString, Parent)
-mkFieldEnv rdr_env = mkNameEnv [ (gre_name gre, (lbl, gre_par gre))
+mkFieldEnv rdr_env = mkNameEnv [ (greInternalName gre, (flLabel fl, gre_par gre))
                                | gres <- occEnvElts rdr_env
                                , gre <- gres
-                               , Just lbl <- [greLabel gre]
+                               , Just fl <- [greFieldLabel gre]
                                ]
 
 -- | Should we report the fact that this 'Name' is unused? The
 -- 'OccName' may differ from 'nameOccName' due to
 -- DuplicateRecordFields.
-reportable :: Child -> Bool
+reportable :: GreName -> Bool
 reportable child
-  | ChildName name <- child
+  | NormalGreName name <- child
   , isWiredInName name = False    -- Don't report unused wired-in names
                                   -- Otherwise we get a zillion warnings
                                   -- from Data.Tuple
@@ -505,7 +505,7 @@ addNameClashErrRn rdr_name gres
     (np1:nps) = gres
     msg1 =  text "either" <+> ppr_gre np1
     msgs = [text "    or" <+> ppr_gre np | np <- nps]
-    ppr_gre gre = sep [ pp_gre_name gre <> comma
+    ppr_gre gre = sep [ pp_greInternalName gre <> comma
                       , pprNameProvenance gre]
 
     -- When printing the name, take care to qualify it in the same
@@ -516,11 +516,11 @@ addNameClashErrRn rdr_name gres
     --                            imported from ‘Prelude’ at T15487.hs:1:8-13
     --                     or ...
     -- See #15487
-    pp_gre_name gre@(GRE { gre_child = child
+    pp_greInternalName gre@(GRE { gre_name = child
                          , gre_lcl = lcl, gre_imp = iss }) =
       case child of
-        ChildField fl  -> text "the field" <+> quotes (ppr fl)
-        ChildName name -> quotes (pp_qual name <> dot <> ppr (nameOccName name))
+        FieldGreName fl  -> text "the field" <+> quotes (ppr fl)
+        NormalGreName name -> quotes (pp_qual name <> dot <> ppr (nameOccName name))
       where
         pp_qual name
                 | lcl

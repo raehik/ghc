@@ -242,25 +242,25 @@ rnModule mod = do
     return (renameHoleModule (unitState dflags) hmap mod)
 
 rnAvailInfo :: Rename AvailInfo
-rnAvailInfo (Avail c) = Avail <$> rnChild c
+rnAvailInfo (Avail c) = Avail <$> rnGreName c
 rnAvailInfo (AvailTC n ns) = do
     -- Why don't we rnIfaceGlobal the availName itself?  It may not
     -- actually be exported by the module it putatively is from, in
     -- which case we won't be able to tell what the name actually
     -- is.  But for the availNames they MUST be exported, so they
     -- will rename fine.
-    ns' <- mapM rnChild ns
+    ns' <- mapM rnGreName ns
     case ns' of
         [] -> panic "rnAvailInfoEmpty AvailInfo"
         (rep:rest) -> ASSERT2( all ((== childModule rep) . childModule) rest, ppr rep $$ hcat (map ppr rest) ) do
                          n' <- setNameModule (Just (childModule rep)) n
                          return (AvailTC n' ns')
   where
-    childModule = nameModule . childName
+    childModule = nameModule . greNameInternal
 
-rnChild :: Rename Child
-rnChild (ChildName   n) = ChildName  <$> rnIfaceGlobal n
-rnChild (ChildField fl) = ChildField <$> rnFieldLabel fl
+rnGreName :: Rename GreName
+rnGreName (NormalGreName n) = NormalGreName <$> rnIfaceGlobal n
+rnGreName (FieldGreName fl) = FieldGreName  <$> rnFieldLabel fl
 
 rnFieldLabel :: Rename FieldLabel
 rnFieldLabel (FieldLabel l b sel) = do

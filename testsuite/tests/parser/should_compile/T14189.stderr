@@ -138,11 +138,11 @@
           {Name: T14189.f}))]))
      [(AvailTC
        {Name: T14189.MyType}
-       [(ChildName
+       [(NormalGreName
          {Name: T14189.MyType})
-       ,(ChildName
+       ,(NormalGreName
          {Name: T14189.NT})
-       ,(ChildField
+       ,(FieldGreName
          (FieldLabel
           {FastString: "f"}
           (False)

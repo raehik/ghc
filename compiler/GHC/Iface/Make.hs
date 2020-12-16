@@ -374,8 +374,8 @@ mkIfaceExports exports
     sort_subs (Avail n) = Avail n
     sort_subs (AvailTC n []) = AvailTC n []
     sort_subs (AvailTC n (m:ms))
-       | ChildName n==m  = AvailTC n (m:sortBy stableChildCmp ms)
-       | otherwise = AvailTC n (sortBy stableChildCmp (m:ms))
+       | NormalGreName n==m  = AvailTC n (m:sortBy stableGreNameCmp ms)
+       | otherwise = AvailTC n (sortBy stableGreNameCmp (m:ms))
        -- Maintain the AvailTC Invariant
 
 {-

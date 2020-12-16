@@ -146,7 +146,7 @@ accumExports f = fmap (catMaybes . snd) . mapAccumLM f' emptyExportAccum
             Just (Just (acc', y)) -> (acc', Just y)
             _                     -> (acc, Nothing)
 
-type ExportOccMap = OccEnv (Child, IE GhcPs)
+type ExportOccMap = OccEnv (GreName, IE GhcPs)
         -- Tracks what a particular exported OccName
         --   in an export list refers to, and which item
         --   it came from.  It's illegal to export two distinct things
@@ -248,7 +248,7 @@ exports_from_avail Nothing rdr_env _imports _this_mod
     -- without locally defining (and instead importing) the parent (`n`)
     fix_faminst avail@(AvailTC n ns)
       | availExportsDecl avail = avail
-      | otherwise = AvailTC n (ChildName n:ns)
+      | otherwise = AvailTC n (NormalGreName n:ns)
     fix_faminst avail = avail
 
 
@@ -268,7 +268,7 @@ exports_from_avail (Just (L _ rdr_items)) rdr_env imports this_mod
     -- See Note [Avails of associated data families]
     expand_tyty_gre :: GlobalRdrElt -> [GlobalRdrElt]
     expand_tyty_gre (gre@GRE { gre_par = ParentIs p })
-      | isTyConName p, isTyConName (gre_name gre) = [gre, gre{ gre_par = NoParent }]
+      | isTyConName p, isTyConName (greInternalName gre) = [gre, gre{ gre_par = NoParent }]
     expand_tyty_gre gre = [gre]
 
     imported_modules = [ imv_name imv
@@ -414,12 +414,7 @@ exports_from_avail (Just (L _ rdr_items)) rdr_env imports this_mod
     addUsedKids parent_rdr kid_gres = addUsedGREs (pickGREs parent_rdr kid_gres)
 
 classifyGREs :: [GlobalRdrElt] -> ([Name], [FieldLabel])
-classifyGREs = partitionEithers . map classifyGRE
-
-classifyGRE :: GlobalRdrElt -> Either Name FieldLabel
-classifyGRE gre = case gre_child gre of
-                    ChildName name -> Left name
-                    ChildField fl  -> Right fl
+classifyGREs = partitionGreNames . map gre_name
 
 -- Renaming and typechecking of exports happens after everything else has
 -- been typechecked.
@@ -522,8 +517,8 @@ lookupChildrenExport spec_parent rdr_items =
                                ; return (Left (L l (IEName (L l ub))))}
             FoundChild par child -> do { checkPatSynParent spec_parent par child
                                        ; return $ case child of
-                                           ChildField fl   -> Right (L (getLoc n) fl)
-                                           ChildName  name -> Left (replaceLWrappedName n name)
+                                           FieldGreName fl   -> Right (L (getLoc n) fl)
+                                           NormalGreName  name -> Left (replaceLWrappedName n name)
                                        }
             IncorrectParent p c gs -> failWithDcErr p c gs
 
@@ -587,33 +582,30 @@ lookupChildrenExport spec_parent rdr_items =
 checkPatSynParent :: Name    -- ^ Alleged parent type constructor
                              -- User wrote T( P, Q )
                   -> Parent  -- The parent of P we discovered
-                  -> Child   -- ^ Either a
+                  -> GreName   -- ^ Either a
                              --   a) Pattern Synonym Constructor
                              --   b) A pattern synonym selector
                   -> TcM ()  -- Fails if wrong parent
 checkPatSynParent _ (ParentIs {}) _
   = return ()
 
-checkPatSynParent parent NoParent child
+checkPatSynParent parent NoParent gname
   | isUnboundName parent -- Avoid an error cascade
   = return ()
 
   | otherwise
   = do { parent_ty_con <- tcLookupTyCon parent
-       ; let mpat_syn = case child of
-                          ChildName n -> n
-                          ChildField fl -> flSelector fl
-       ; mpat_syn_thing <- tcLookupGlobal mpat_syn
+       ; mpat_syn_thing <- tcLookupGlobal (greNameInternal gname)
 
         -- 1. Check that the Id was actually from a thing associated with patsyns
        ; case mpat_syn_thing of
             AnId i | isId i
                    , RecSelId { sel_tycon = RecSelPatSyn p } <- idDetails i
-                   -> handle_pat_syn (selErr child) parent_ty_con p
+                   -> handle_pat_syn (selErr gname) parent_ty_con p
 
             AConLike (PatSynCon p) -> handle_pat_syn (psErr p) parent_ty_con p
 
-            _ -> failWithDcErr parent child [] }
+            _ -> failWithDcErr parent gname [] }
   where
     psErr  = exportErrCtxt "pattern synonym"
     selErr = exportErrCtxt "pattern synonym record selector"
@@ -664,17 +656,17 @@ check_occs ie occs avails
   -- 'avails' are the entities specified by 'ie'
   = foldlM check occs children
   where
-    children = concatMap availChildren avails
+    children = concatMap availGreNames avails
 
     -- Check for distinct children exported with the same OccName (an error) or
     -- for duplicate exports of the same child (a warning).
-    check :: ExportOccMap -> Child -> RnM ExportOccMap
+    check :: ExportOccMap -> GreName -> RnM ExportOccMap
     check occs child
       = case try_insert occs child of
           Right occs' -> return occs'
 
           Left (child', ie')
-            | childName child == childName child'   -- Duplicate export
+            | greNameInternal child == greNameInternal child'   -- Duplicate export
             -- But we don't want to warn if the same thing is exported
             -- by two different module exports. See ticket #4478.
             -> do { warnIfFlag Opt_WarnDuplicateExports
@@ -689,7 +681,7 @@ check_occs ie occs avails
 
     -- Try to insert a child into the map, returning Left if there is something
     -- already exported with the same OccName
-    try_insert :: ExportOccMap -> Child -> Either (Child, IE GhcPs) ExportOccMap
+    try_insert :: ExportOccMap -> GreName -> Either (GreName, IE GhcPs) ExportOccMap
     try_insert occs child
       = case lookupOccEnv occs name_occ of
           Nothing -> Right (extendOccEnv occs name_occ (child, ie))
@@ -697,11 +689,11 @@ check_occs ie occs avails
       where
         -- For fields, we check for export clashes using the (OccName of the)
         -- selector Name
-        name_occ = nameOccName (childName child)
+        name_occ = nameOccName (greNameInternal child)
 
 
-dupExport_ok :: Child -> IE GhcPs -> IE GhcPs -> Bool
--- The Child is exported by both IEs. Is that ok?
+dupExport_ok :: GreName -> IE GhcPs -> IE GhcPs -> Bool
+-- The GreName is exported by both IEs. Is that ok?
 -- "No"  iff the name is mentioned explicitly in both IEs
 --        or one of the IEs mentions the name *alone*
 -- "Yes" otherwise
@@ -787,7 +779,7 @@ exportItemErr export_item
           text "attempts to export constructors or class methods that are not visible here" ]
 
 
-dupExportWarn :: Child -> IE GhcPs -> IE GhcPs -> SDoc
+dupExportWarn :: GreName -> IE GhcPs -> IE GhcPs -> SDoc
 dupExportWarn child ie1 ie2
   = hsep [quotes (ppr child),
           text "is exported by", quotes (ppr ie1),
@@ -805,9 +797,9 @@ dcErrMsg ty_con what_is thing parents =
                       [_] -> text "Parent:"
                       _  -> text "Parents:") <+> fsep (punctuate comma parents)
 
-failWithDcErr :: Name -> Child -> [Name] -> TcM a
+failWithDcErr :: Name -> GreName -> [Name] -> TcM a
 failWithDcErr parent child parents = do
-  ty_thing <- tcLookupGlobal (childName child)
+  ty_thing <- tcLookupGlobal (greNameInternal child)
   failWithTc $ dcErrMsg parent (tyThingCategory' ty_thing)
                         (ppr child) (map ppr parents)
   where
@@ -818,7 +810,7 @@ failWithDcErr parent child parents = do
 
 
 exportClashErr :: GlobalRdrEnv
-               -> Child -> Child
+               -> GreName -> GreName
                -> IE GhcPs -> IE GhcPs
                -> MsgDoc
 exportClashErr global_env child1 child2 ie1 ie2
@@ -836,16 +828,16 @@ exportClashErr global_env child1 child2 ie1 ie2
     -- DuplicateRecordFields means that nameOccName might be a mangled
     -- $sel-prefixed thing, in which case show the correct OccName alone
     -- (but otherwise show the Name so it will have a module qualifier)
-    ppr_name (ChildField fl) | flIsOverloaded fl = ppr fl
-                             | otherwise         = ppr (flSelector fl)
-    ppr_name (ChildName name) = ppr name
+    ppr_name (FieldGreName fl) | flIsOverloaded fl = ppr fl
+                               | otherwise         = ppr (flSelector fl)
+    ppr_name (NormalGreName name) = ppr name
 
     -- get_gre finds a GRE for the Name, so that we can show its provenance
     gre1 = get_gre child1
     gre2 = get_gre child2
     get_gre child
         = fromMaybe (pprPanic "exportClashErr" (ppr child))
-                    (lookupGRE_Child global_env child)
+                    (lookupGRE_GreName global_env child)
     (child1', gre1', ie1', child2', gre2', ie2') =
       case SrcLoc.leftmost_smallest (greSrcSpan gre1) (greSrcSpan gre2) of
         LT -> (child1, gre1, ie1, child2, gre2, ie2)

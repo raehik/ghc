@@ -645,7 +645,7 @@ extendGlobalRdrEnvRn avails new_fixities
       | otherwise
       = fix_env
       where
-        name = gre_name gre
+        name = greInternalName gre
         occ  = greOccName gre
 
     new_gres :: [GlobalRdrElt]  -- New LocalDef GREs, derived from avails
@@ -670,7 +670,7 @@ extendGlobalRdrEnvRn avails new_fixities
         -- that are distinct (#9156).
         isDupGRE gre' = isLocalGRE gre'
                 && (not (isOverloadedRecFldGRE gre && isOverloadedRecFldGRE gre')
-                     || (gre_child gre == gre_child gre'))
+                     || (gre_name gre == gre_name gre'))
 
 
 {- *********************************************************************
@@ -962,13 +962,13 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
     all_avails = mi_exports iface
 
         -- See Note [Dealing with imports]
-    imp_occ_env :: OccEnv (NameEnv (Child,    -- the name or field
+    imp_occ_env :: OccEnv (NameEnv (GreName,    -- the name or field
                            AvailInfo,   -- the export item providing it
                            Maybe Name))   -- the parent of associated types
     imp_occ_env = mkOccEnv_C (plusNameEnv_C combine)
-                             [ (occName c, mkNameEnv [(childName c, (c, a, Nothing))])
+                             [ (occName c, mkNameEnv [(greNameInternal c, (c, a, Nothing))])
                                      | a <- all_avails
-                                     , c <- availChildren a]
+                                     , c <- availGreNames a]
     -- See Note [Dealing with imports]
     -- 'combine' may be called for associated data types which appear
     -- twice in the all_avails. In the example, we combine
@@ -977,13 +977,13 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
     --
     -- 'combine' may also be called for pattern synonyms which appear both
     -- unassociated and associated (#11959)
-    combine :: (Child, AvailInfo, Maybe Name) -> (Child, AvailInfo, Maybe Name) -> (Child, AvailInfo, Maybe Name)
-    combine (ChildName name1, a1@(AvailTC p1 _), mb1)
-            (ChildName name2, a2@(AvailTC p2 _), mb2)
+    combine :: (GreName, AvailInfo, Maybe Name) -> (GreName, AvailInfo, Maybe Name) -> (GreName, AvailInfo, Maybe Name)
+    combine (NormalGreName name1, a1@(AvailTC p1 _), mb1)
+            (NormalGreName name2, a2@(AvailTC p2 _), mb2)
       = ASSERT2( name1 == name2 && isNothing mb1 && isNothing mb2
                , ppr name1 <+> ppr name2 <+> ppr mb1 <+> ppr mb2 )
-        if p1 == name1 then (ChildName name1, a1, Just p2)
-                       else (ChildName name1, a2, Just p1)
+        if p1 == name1 then (NormalGreName name1, a1, Just p2)
+                       else (NormalGreName name1, a2, Just p1)
     combine (c1, a1, mb1)
             (c2, a2, mb2)
       = ASSERT2( c1 == c2 && isNothing mb1 && isNothing mb2 && (isAvailTC a1 || isAvailTC a2)
@@ -998,7 +998,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
     lookup_name ie rdr
        | isQual rdr              = failLookupWith (QualImportError rdr)
        | Just succ <- mb_success = case nameEnvElts succ of
-                                     [(c,a,x)] -> return (childName c, a, x)
+                                     [(c,a,x)] -> return (greNameInternal c, a, x)
                                      xs -> failLookupWith (AmbiguousImport rdr (map sndOf3 xs))
        | otherwise               = failLookupWith (BadImport ie)
       where
@@ -1069,11 +1069,11 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                 renamed_ie = IEThingAll noExtField (L l (replaceWrappedName tc name))
                 sub_avails = case avail of
                                Avail {}           -> []
-                               AvailTC name2 subs -> [(renamed_ie, AvailTC name2 (subs \\ [ChildName name]))]
+                               AvailTC name2 subs -> [(renamed_ie, AvailTC name2 (subs \\ [NormalGreName name]))]
             case mb_parent of
               Nothing     -> return ([(renamed_ie, avail)], warns)
                              -- non-associated ty/cls
-              Just parent -> return ((renamed_ie, AvailTC parent [ChildName name]) : sub_avails, warns)
+              Just parent -> return ((renamed_ie, AvailTC parent [NormalGreName name]) : sub_avails, warns)
                              -- associated type
 
         IEThingAbs _ (L l tc')
@@ -1097,7 +1097,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                <- lookup_name (IEThingAbs noExtField ltc) (ieWrappedName rdr_tc)
 
            -- Look up the children in the sub-names of the parent
-           let subnames = availSubordinateChildren avail
+           let subnames = availSubordinateGreNames avail
            case lookupChildren subnames rdr_ns of
 
              Failed rdrs -> failLookupWith (BadImport (IEThingWith xt ltc wc rdrs))
@@ -1214,7 +1214,7 @@ mkChildEnv gres = foldr add emptyNameEnv gres
 findChildren :: NameEnv [a] -> Name -> [a]
 findChildren env n = lookupNameEnv env n `orElse` []
 
-lookupChildren :: [Child] -> [LIEWrappedName RdrName]
+lookupChildren :: [GreName] -> [LIEWrappedName RdrName]
                -> MaybeErr [LIEWrappedName RdrName]   -- The ones for which the lookup failed
                            ([Located Name], [Located FieldLabel])
 -- (lookupChildren all_kids rdr_items) maps each rdr_item to its
@@ -1239,12 +1239,9 @@ lookupChildren all_kids rdr_items
 
     doOne item@(L l r)
        = case (lookupFsEnv kid_env . occNameFS . rdrNameOcc . ieWrappedName) r of
-           Just [ChildName n]                       -> Succeeded (Left (L l n))
-           Just rs | Just fs <- traverse toField rs -> Succeeded (Right (map (L l) fs))
-           _                                        -> Failed    item
-
-    toField (ChildField fl) = Just fl
-    toField (ChildName {})  = Nothing
+           Just [NormalGreName n]                             -> Succeeded (Left (L l n))
+           Just rs | Just fs <- traverse greNameFieldLabel rs -> Succeeded (Right (map (L l) fs))
+           _                                                  -> Failed    item
 
     -- See Note [Children for duplicate record fields]
     kid_env = extendFsEnvList_C (++) emptyFsEnv
@@ -1285,11 +1282,11 @@ reportUnusedNames gbl_env hsc_src
     gre_is_used :: NameSet -> GlobalRdrElt -> Bool
     gre_is_used used_names gre0
         = name `elemNameSet` used_names
-          || any (\ gre -> gre_name gre `elemNameSet` used_names) (findChildren kids_env name)
+          || any (\ gre -> greInternalName gre `elemNameSet` used_names) (findChildren kids_env name)
                 -- A use of C implies a use of T,
                 -- if C was brought into scope by T(..) or T(C)
       where
-        name = gre_name gre0
+        name = greInternalName gre0
 
     -- Filter out the ones that are
     --  (a) defined in this module, and
@@ -1306,7 +1303,7 @@ reportUnusedNames gbl_env hsc_src
 
       in filter is_unused_local defined_but_not_used
     is_unused_local :: GlobalRdrElt -> Bool
-    is_unused_local gre = isLocalGRE gre && isExternalName (gre_name gre)
+    is_unused_local gre = isLocalGRE gre && isExternalName (greInternalName gre)
 
 {- *********************************************************************
 *                                                                      *
@@ -1433,7 +1430,7 @@ findImportUsage imports used_gres
                                -- srcSpanEnd: see Note [The ImportMap]
                     `orElse` []
 
-        used_names   = mkNameSet (map      gre_name        used_gres)
+        used_names   = mkNameSet (map      greInternalName        used_gres)
         used_parents = mkNameSet (mapMaybe greParent_maybe used_gres)
 
         unused_imps   -- Not trivial; see eg #7454
@@ -1619,7 +1616,7 @@ getMinimalImports = fmap combine . mapM mk_minimal
     -- we want to say "T(..)", but if we're importing only a subset we want
     -- to say "T(A,B,C)".  So we have to find out what the module exports.
     to_ie _ (Avail c)  -- Note [Overloaded field import]
-       = [IEVar noExtField (to_ie_post_rn $ noLoc (childPrintableName c))]
+       = [IEVar noExtField (to_ie_post_rn $ noLoc (greNamePrintable c))]
     to_ie _ avail@(AvailTC n [_])  -- Exporting the main decl and nothing else
        | availExportsDecl avail = [IEThingAbs noExtField (to_ie_post_rn $ noLoc n)]
     to_ie iface (AvailTC n cs)
@@ -1639,7 +1636,7 @@ getMinimalImports = fmap combine . mapM mk_minimal
                       [IEThingWith (map noLoc fs) (to_ie_post_rn $ noLoc n) NoIEWildcard
                                 (map (to_ie_post_rn . noLoc) (filter (/= n) ns))]
         where
-          (ns, fs) = partitionChildren cs
+          (ns, fs) = partitionGreNames cs
 
           all_used avail_cs = all (`elem` cs) avail_cs
 
@@ -1821,10 +1818,10 @@ badImportItemErr iface decl_spec ie avails
   where
     checkIfDataCon (AvailTC _ ns) =
       case find (\n -> importedFS == occNameFS (occName n)) ns of
-        Just n  -> isDataConName (childName n)
+        Just n  -> isDataConName (greNameInternal n)
         Nothing -> False
     checkIfDataCon _ = False
-    availOccName = occName . availChild
+    availOccName = occName . availGreName
     importedFS = occNameFS . rdrNameOcc $ ieName ie
 
 illegalImportItemErr :: SDoc
@@ -1865,7 +1862,7 @@ addDupDeclErr gres@(gre : _)
   where
     sorted_names =
       sortBy (SrcLoc.leftmost_smallest `on` nameSrcSpan)
-             (map gre_name gres)
+             (map greInternalName gres)
 
 
 
