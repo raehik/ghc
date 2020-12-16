@@ -645,7 +645,7 @@ extendGlobalRdrEnvRn avails new_fixities
       | otherwise
       = fix_env
       where
-        name = greInternalName gre
+        name = greMangledName gre
         occ  = greOccName gre
 
     new_gres :: [GlobalRdrElt]  -- New LocalDef GREs, derived from avails
@@ -966,7 +966,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
                            AvailInfo,   -- the export item providing it
                            Maybe Name))   -- the parent of associated types
     imp_occ_env = mkOccEnv_C (plusNameEnv_C combine)
-                             [ (occName c, mkNameEnv [(greNameInternal c, (c, a, Nothing))])
+                             [ (occName c, mkNameEnv [(greNameMangledName c, (c, a, Nothing))])
                                      | a <- all_avails
                                      , c <- availGreNames a]
     -- See Note [Dealing with imports]
@@ -998,7 +998,7 @@ filterImports iface decl_spec (Just (want_hiding, L l import_items))
     lookup_name ie rdr
        | isQual rdr              = failLookupWith (QualImportError rdr)
        | Just succ <- mb_success = case nameEnvElts succ of
-                                     [(c,a,x)] -> return (greNameInternal c, a, x)
+                                     [(c,a,x)] -> return (greNameMangledName c, a, x)
                                      xs -> failLookupWith (AmbiguousImport rdr (map sndOf3 xs))
        | otherwise               = failLookupWith (BadImport ie)
       where
@@ -1282,11 +1282,11 @@ reportUnusedNames gbl_env hsc_src
     gre_is_used :: NameSet -> GlobalRdrElt -> Bool
     gre_is_used used_names gre0
         = name `elemNameSet` used_names
-          || any (\ gre -> greInternalName gre `elemNameSet` used_names) (findChildren kids_env name)
+          || any (\ gre -> greMangledName gre `elemNameSet` used_names) (findChildren kids_env name)
                 -- A use of C implies a use of T,
                 -- if C was brought into scope by T(..) or T(C)
       where
-        name = greInternalName gre0
+        name = greMangledName gre0
 
     -- Filter out the ones that are
     --  (a) defined in this module, and
@@ -1303,7 +1303,7 @@ reportUnusedNames gbl_env hsc_src
 
       in filter is_unused_local defined_but_not_used
     is_unused_local :: GlobalRdrElt -> Bool
-    is_unused_local gre = isLocalGRE gre && isExternalName (greInternalName gre)
+    is_unused_local gre = isLocalGRE gre && isExternalName (greMangledName gre)
 
 {- *********************************************************************
 *                                                                      *
@@ -1430,7 +1430,7 @@ findImportUsage imports used_gres
                                -- srcSpanEnd: see Note [The ImportMap]
                     `orElse` []
 
-        used_names   = mkNameSet (map      greInternalName        used_gres)
+        used_names   = mkNameSet (map      greMangledName        used_gres)
         used_parents = mkNameSet (mapMaybe greParent_maybe used_gres)
 
         unused_imps   -- Not trivial; see eg #7454
@@ -1616,7 +1616,7 @@ getMinimalImports = fmap combine . mapM mk_minimal
     -- we want to say "T(..)", but if we're importing only a subset we want
     -- to say "T(A,B,C)".  So we have to find out what the module exports.
     to_ie _ (Avail c)  -- Note [Overloaded field import]
-       = [IEVar noExtField (to_ie_post_rn $ noLoc (greNamePrintable c))]
+       = [IEVar noExtField (to_ie_post_rn $ noLoc (greNamePrintableName c))]
     to_ie _ avail@(AvailTC n [_])  -- Exporting the main decl and nothing else
        | availExportsDecl avail = [IEThingAbs noExtField (to_ie_post_rn $ noLoc n)]
     to_ie iface (AvailTC n cs)
@@ -1818,7 +1818,7 @@ badImportItemErr iface decl_spec ie avails
   where
     checkIfDataCon (AvailTC _ ns) =
       case find (\n -> importedFS == occNameFS (occName n)) ns of
-        Just n  -> isDataConName (greNameInternal n)
+        Just n  -> isDataConName (greNameMangledName n)
         Nothing -> False
     checkIfDataCon _ = False
     availOccName = occName . availGreName
@@ -1862,7 +1862,7 @@ addDupDeclErr gres@(gre : _)
   where
     sorted_names =
       sortBy (SrcLoc.leftmost_smallest `on` nameSrcSpan)
-             (map greInternalName gres)
+             (map greMangledName gres)
 
 
 

@@ -176,7 +176,7 @@ checkHsigIface tcg_env gr sig_iface
       -- be a reexport.  In this case, make sure the 'Name' of the
       -- reexport matches the 'Name exported here.
       | [gre] <- lookupGlobalRdrEnv gr (nameOccName name) = do
-        let name' = greInternalName gre
+        let name' = greMangledName gre
         when (name /= name') $ do
             -- See Note [Error reporting bad reexport]
             -- TODO: Actually this error swizzle doesn't work
@@ -754,7 +754,7 @@ mergeSignatures
     let ifaces = lcl_iface : ext_ifaces
 
     -- STEP 4.1: Merge fixities (we'll verify shortly) tcg_fix_env
-    let fix_env = mkNameEnv [ (greInternalName rdr_elt, FixItem occ f)
+    let fix_env = mkNameEnv [ (greMangledName rdr_elt, FixItem occ f)
                             | (occ, f) <- concatMap mi_fixities ifaces
                             , rdr_elt <- lookupGlobalRdrEnv rdr_env occ ]
 
@@ -955,7 +955,7 @@ checkImplements impl_mod req_mod@(Module uid mod_name) = do
 
     let avails = calculateAvails home_unit
                     impl_iface False{- safe -} NotBoot ImportedBySystem
-        fix_env = mkNameEnv [ (greInternalName rdr_elt, FixItem occ f)
+        fix_env = mkNameEnv [ (greMangledName rdr_elt, FixItem occ f)
                             | (occ, f) <- mi_fixities impl_iface
                             , rdr_elt <- lookupGlobalRdrEnv impl_gr occ ]
     updGblEnv (\tcg_env -> tcg_env {

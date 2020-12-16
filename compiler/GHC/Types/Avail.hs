@@ -30,8 +30,8 @@ module GHC.Types.Avail (
     nubAvails,
 
     GreName(..),
-    greNameInternal,
-    greNamePrintable,
+    greNameMangledName,
+    greNamePrintableName,
     greNameSrcSpan,
     greNameFieldLabel,
     partitionGreNames,
@@ -213,7 +213,7 @@ availExportsDecl _ = True
 -- | Just the main name made available, i.e. not the available pieces
 -- of type or class brought into scope by the 'AvailInfo'
 availName :: AvailInfo -> Name
-availName (Avail n)     = greNameInternal n
+availName (Avail n)     = greNameMangledName n
 availName (AvailTC n _) = n
 
 availGreName :: AvailInfo -> GreName
@@ -231,8 +231,8 @@ childNonOverloadedNames (FieldGreName fl) = [ flSelector fl | not (flIsOverloade
 
 -- | All names made available by the availability information (including overloaded selectors)
 availNamesWithSelectors :: AvailInfo -> [Name]
-availNamesWithSelectors (Avail c) = [greNameInternal c]
-availNamesWithSelectors (AvailTC _ cs) = map greNameInternal cs
+availNamesWithSelectors (Avail c) = [greNameMangledName c]
+availNamesWithSelectors (AvailTC _ cs) = map greNameMangledName cs
 
 -- | Names for non-fields made available by the availability information
 availNonFldNames :: AvailInfo -> [Name]
@@ -263,7 +263,7 @@ availSubordinateGreNames avail@(AvailTC _ ns)
 
 
 -- | Used where we may have an ordinary name or a record field label.
--- See Note [GreName] in GHC.Types.Name.Reader.
+-- See Note [GreNames] in GHC.Types.Name.Reader.
 data GreName = NormalGreName Name
              | FieldGreName FieldLabel
     deriving (Data, Eq)
@@ -276,15 +276,17 @@ instance HasOccName GreName where
   occName (NormalGreName n) = occName n
   occName (FieldGreName fl) = occName fl
 
-greNameInternal :: GreName -> Name
-greNameInternal (NormalGreName n) = n
-greNameInternal (FieldGreName fl) = flSelector fl
+-- | A 'Name' for internal use, but not for output to the user.  For fields, the
+-- 'OccName' will be the selector.  See Note [GreNames] in GHC.Types.Name.Reader.
+greNameMangledName :: GreName -> Name
+greNameMangledName (NormalGreName n) = n
+greNameMangledName (FieldGreName fl) = flSelector fl
 
--- | A Name for the child suitable for output to the user.  For fields, the
--- OccName will be the field label.  See 'fieldLabelPrintableName'.
-greNamePrintable :: GreName -> Name
-greNamePrintable (NormalGreName n) = n
-greNamePrintable (FieldGreName fl) = fieldLabelPrintableName fl
+-- | A 'Name' suitable for output to the user.  For fields, the 'OccName' will
+-- be the field label.  See Note [GreNames] in GHC.Types.Name.Reader.
+greNamePrintableName :: GreName -> Name
+greNamePrintableName (NormalGreName n) = n
+greNamePrintableName (FieldGreName fl) = fieldLabelPrintableName fl
 
 greNameSrcSpan :: GreName -> SrcSpan
 greNameSrcSpan (NormalGreName n) = nameSrcSpan n
@@ -322,7 +324,7 @@ plusAvail a1 a2 = pprPanic "GHC.Rename.Env.plusAvail" (hsep [ppr a1,ppr a2])
 -- | trims an 'AvailInfo' to keep only a single name
 trimAvail :: AvailInfo -> Name -> AvailInfo
 trimAvail avail@(Avail {})         _ = avail
-trimAvail avail@(AvailTC n ns) m = case find ((== m) . greNameInternal) ns of
+trimAvail avail@(AvailTC n ns) m = case find ((== m) . greNameMangledName) ns of
     Just c  -> AvailTC n [c]
     Nothing -> pprPanic "trimAvail" (hsep [ppr avail, ppr m])
 
@@ -334,10 +336,10 @@ filterAvails keep avails = foldr (filterAvail keep) [] avails
 filterAvail :: (Name -> Bool) -> AvailInfo -> [AvailInfo] -> [AvailInfo]
 filterAvail keep ie rest =
   case ie of
-    Avail c | keep (greNameInternal c) -> ie : rest
+    Avail c | keep (greNameMangledName c) -> ie : rest
             | otherwise -> rest
     AvailTC tc cs ->
-        let cs' = filter (keep . greNameInternal) cs
+        let cs' = filter (keep . greNameMangledName) cs
         in if null cs' then rest else AvailTC tc cs' : rest
 
 

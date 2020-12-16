@@ -268,7 +268,7 @@ exports_from_avail (Just (L _ rdr_items)) rdr_env imports this_mod
     -- See Note [Avails of associated data families]
     expand_tyty_gre :: GlobalRdrElt -> [GlobalRdrElt]
     expand_tyty_gre (gre@GRE { gre_par = ParentIs p })
-      | isTyConName p, isTyConName (greInternalName gre) = [gre, gre{ gre_par = NoParent }]
+      | isTyConName p, isTyConName (greMangledName gre) = [gre, gre{ gre_par = NoParent }]
     expand_tyty_gre gre = [gre]
 
     imported_modules = [ imv_name imv
@@ -595,7 +595,7 @@ checkPatSynParent parent NoParent gname
 
   | otherwise
   = do { parent_ty_con <- tcLookupTyCon parent
-       ; mpat_syn_thing <- tcLookupGlobal (greNameInternal gname)
+       ; mpat_syn_thing <- tcLookupGlobal (greNameMangledName gname)
 
         -- 1. Check that the Id was actually from a thing associated with patsyns
        ; case mpat_syn_thing of
@@ -666,7 +666,7 @@ check_occs ie occs avails
           Right occs' -> return occs'
 
           Left (child', ie')
-            | greNameInternal child == greNameInternal child'   -- Duplicate export
+            | greNameMangledName child == greNameMangledName child'   -- Duplicate export
             -- But we don't want to warn if the same thing is exported
             -- by two different module exports. See ticket #4478.
             -> do { warnIfFlag Opt_WarnDuplicateExports
@@ -689,7 +689,7 @@ check_occs ie occs avails
       where
         -- For fields, we check for export clashes using the (OccName of the)
         -- selector Name
-        name_occ = nameOccName (greNameInternal child)
+        name_occ = nameOccName (greNameMangledName child)
 
 
 dupExport_ok :: GreName -> IE GhcPs -> IE GhcPs -> Bool
@@ -799,7 +799,7 @@ dcErrMsg ty_con what_is thing parents =
 
 failWithDcErr :: Name -> GreName -> [Name] -> TcM a
 failWithDcErr parent child parents = do
-  ty_thing <- tcLookupGlobal (greNameInternal child)
+  ty_thing <- tcLookupGlobal (greNameMangledName child)
   failWithTc $ dcErrMsg parent (tyThingCategory' ty_thing)
                         (ppr child) (map ppr parents)
   where

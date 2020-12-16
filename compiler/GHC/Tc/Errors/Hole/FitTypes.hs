@@ -56,11 +56,11 @@ instance NamedThing HoleFitCandidate where
   getName hfc = case hfc of
                      IdHFCand cid -> idName cid
                      NameHFCand cname -> cname
-                     GreHFCand cgre -> greInternalName cgre
+                     GreHFCand cgre -> greMangledName cgre
   getOccName hfc = case hfc of
                      IdHFCand cid -> occName cid
                      NameHFCand cname -> occName cname
-                     GreHFCand cgre -> occName (greInternalName cgre)
+                     GreHFCand cgre -> occName (greMangledName cgre)
 
 instance HasOccName HoleFitCandidate where
   occName = getOccName

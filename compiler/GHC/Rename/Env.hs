@@ -267,7 +267,7 @@ lookupTopBndrRn rdr_name =
 
         ; env <- getGlobalRdrEnv
         ; case filter isLocalGRE (lookupGRE_RdrName rdr_name env) of
-            [gre] -> return (greInternalName gre)
+            [gre] -> return (greMangledName gre)
             _     -> do -- Ambiguous (can't happen) or unbound
                         traceRn "lookupTopBndrRN fail" (ppr rdr_name)
                         unboundName WL_LocalTop rdr_name
@@ -307,9 +307,9 @@ lookupExactOcc_either name
                               Nothing  -> []
              gres = [ gre | occ <- main_occ : demoted_occs
                           , gre <- lookupGlobalRdrEnv env occ
-                          , greInternalName gre == name ]
+                          , greMangledName gre == name ]
        ; case gres of
-           [gre] -> return (Right (greInternalName gre))
+           [gre] -> return (Right (greMangledName gre))
 
            []    -> -- See Note [Splicing Exact names]
                     do { lcl_env <- getLocalRdrEnv
@@ -332,7 +332,7 @@ sameNameErr gres@(_ : _)
   = hang (text "Same exact name in multiple name-spaces:")
        2 (vcat (map pp_one sorted_names) $$ th_hint)
   where
-    sorted_names = sortBy (SrcLoc.leftmost_smallest `on` nameSrcSpan) (map greInternalName gres)
+    sorted_names = sortBy (SrcLoc.leftmost_smallest `on` nameSrcSpan) (map greMangledName gres)
     pp_one name
       = hang (pprNameSpace (occNameSpace (getOccName name))
               <+> quotes (ppr name) <> comma)
@@ -763,7 +763,7 @@ lookupSubBndrOcc warn_if_deprec the_parent doc rdr_name = do
       lookupSubBndrOcc_helper True warn_if_deprec the_parent rdr_name
   case res of
     NameNotFound -> return (Left (unknownSubordinateErr doc rdr_name))
-    FoundChild _p child -> return (Right (greNameInternal child))
+    FoundChild _p child -> return (Right (greNameMangledName child))
     IncorrectParent {}
          -- See [Mismatched class methods and associated type families]
          -- in TcInstDecls.
@@ -1120,7 +1120,7 @@ lookupGlobalOccRn rdr_name =
 lookupGlobalOccRn_base :: RdrName -> RnM (Maybe Name)
 lookupGlobalOccRn_base rdr_name =
   runMaybeT . msum . map MaybeT $
-    [ fmap greInternalName <$> lookupGreRn_maybe rdr_name
+    [ fmap greMangledName <$> lookupGreRn_maybe rdr_name
     , listToMaybe <$> lookupQualifiedNameGHCi rdr_name ]
                       -- This test is not expensive,
                       -- and only happens for failed lookups
@@ -1136,7 +1136,7 @@ lookupInfoOccRn :: RdrName -> RnM [Name]
 lookupInfoOccRn rdr_name =
   lookupExactOrOrig rdr_name (:[]) $
     do { rdr_env <- getGlobalRdrEnv
-       ; let ns = map greInternalName (lookupGRE_RdrName rdr_name rdr_env)
+       ; let ns = map greMangledName (lookupGRE_RdrName rdr_name rdr_env)
        ; qual_ns <- lookupQualifiedNameGHCi rdr_name
        ; return (ns ++ (qual_ns `minusList` ns)) }
 
@@ -1159,14 +1159,14 @@ lookupGlobalOccRn_overloaded overload_ok rdr_name =
                 GreNotFound  -> return Nothing
                 OneNameMatch gre -> do
                   let wrapper = if isRecFldGRE gre then Right . (:[]) else Left
-                  return $ Just (wrapper (greInternalName gre))
+                  return $ Just (wrapper (greMangledName gre))
                 MultipleNames gres  | all isRecFldGRE gres && overload_ok ->
                   -- Don't record usage for ambiguous selectors
                   -- until we know which is meant
-                  return $ Just (Right (map greInternalName gres))
+                  return $ Just (Right (map greMangledName gres))
                 MultipleNames gres  -> do
                   addNameClashErrRn rdr_name gres
-                  return (Just (Left (greInternalName (head gres)))) }
+                  return (Just (Left (greMangledName (head gres)))) }
 
 
 --------------------------------------------------
@@ -1253,7 +1253,7 @@ lookupGreAvailRn rdr_name
                         -- Returning an unbound name here prevents an error
                         -- cascade
         OneNameMatch gre ->
-          return (greInternalName gre, availFromGRE gre)
+          return (greMangledName gre, availFromGRE gre)
 
 
 {-
@@ -1326,7 +1326,7 @@ warnIfDeprecated gre@(GRE { gre_imp = iss })
   = return ()
   where
     occ = greOccName gre
-    name = greInternalName gre
+    name = greMangledName gre
     name_mod = ASSERT2( isExternalName name, ppr name ) nameModule name
     doc = text "The name" <+> quotes (ppr occ) <+> ptext (sLit "is mentioned explicitly")
 
@@ -1558,14 +1558,14 @@ lookupBindGroupOcc ctxt what rdr_name
                                   filter (\n -> nameSpacesRelated
                                                   (rdrNameSpace rdr_name)
                                                   (nameNameSpace n))
-                                $ map greInternalName
+                                $ map greMangledName
                                 $ filter isLocalGRE
                                 $ globalRdrEnvElts env
                  candidates_msg = candidates names_in_scope
-           ; case filter (keep_me . greInternalName) all_gres of
+           ; case filter (keep_me . greMangledName) all_gres of
                [] | null all_gres -> bale_out_with candidates_msg
                   | otherwise     -> bale_out_with local_msg
-               (gre:_)            -> return (Right (greInternalName gre)) }
+               (gre:_)            -> return (Right (greMangledName gre)) }
 
     lookup_group bound_names  -- Look in the local envt (not top level)
       = do { mname <- lookupLocalOccRn_maybe rdr_name

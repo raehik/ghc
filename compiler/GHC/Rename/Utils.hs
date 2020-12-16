@@ -454,7 +454,7 @@ warnUnusedGRE gre@(GRE { gre_lcl = lcl, gre_imp = is })
 -- | Make a map from selector names to field labels and parent tycon
 -- names, to be used when reporting unused record fields.
 mkFieldEnv :: GlobalRdrEnv -> NameEnv (FieldLabelString, Parent)
-mkFieldEnv rdr_env = mkNameEnv [ (greInternalName gre, (flLabel fl, gre_par gre))
+mkFieldEnv rdr_env = mkNameEnv [ (greMangledName gre, (flLabel fl, gre_par gre))
                                | gres <- occEnvElts rdr_env
                                , gre <- gres
                                , Just fl <- [greFieldLabel gre]
@@ -505,7 +505,7 @@ addNameClashErrRn rdr_name gres
     (np1:nps) = gres
     msg1 =  text "either" <+> ppr_gre np1
     msgs = [text "    or" <+> ppr_gre np | np <- nps]
-    ppr_gre gre = sep [ pp_greInternalName gre <> comma
+    ppr_gre gre = sep [ pp_greMangledName gre <> comma
                       , pprNameProvenance gre]
 
     -- When printing the name, take care to qualify it in the same
@@ -516,7 +516,7 @@ addNameClashErrRn rdr_name gres
     --                            imported from ‘Prelude’ at T15487.hs:1:8-13
     --                     or ...
     -- See #15487
-    pp_greInternalName gre@(GRE { gre_name = child
+    pp_greMangledName gre@(GRE { gre_name = child
                          , gre_lcl = lcl, gre_imp = iss }) =
       case child of
         FieldGreName fl  -> text "the field" <+> quotes (ppr fl)

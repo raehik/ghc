@@ -57,7 +57,7 @@ module GHC.Types.Name.Reader (
         greRdrNames, greSrcSpan, greQualModName,
         gresToAvailInfo,
         greDefinitionModule, greDefinitionSrcSpan,
-        greInternalName, grePrintableName,
+        greMangledName, grePrintableName,
 
         -- ** Global 'RdrName' mapping elements: 'GlobalRdrElt', 'Provenance', 'ImportSpec'
         GlobalRdrElt(..), isLocalGRE, isRecFldGRE, isOverloadedRecFldGRE, greFieldLabel,
@@ -477,7 +477,7 @@ type GlobalRdrEnv = OccEnv [GlobalRdrElt]
 --                 greOccName gre = occ
 --
 --              NB: greOccName gre is usually the same as
---                  nameOccName (greInternalName gre), but not always in the
+--                  nameOccName (greMangledName gre), but not always in the
 --                  case of record selectors; see greOccName
 
 -- | Global Reader Element
@@ -569,15 +569,26 @@ in export lists.
 
 Note [GreNames]
 ~~~~~~~~~~~~~~~
-Children that a record fields must be represented using a FieldLabel rather than
-just a Name, because when -XDuplicateRecordFields is enabled the field label is
-different from the OccName of the selector function (see Note [FieldLabel] in
-GHC.Types.FieldLabel).  Thus we use the GreName datatype to represent children
-that may be ordinary Names or FieldLabels.
+GREs in scope that refer to record fields must be represented using a FieldLabel
+rather than just a Name, because when -XDuplicateRecordFields is enabled the
+field label is different from the OccName of the selector function (see Note
+[FieldLabel] in GHC.Types.FieldLabel).  Thus we use the GreName datatype to
+represent children that may be ordinary Names or FieldLabels.
 
-Note that the OccName used when adding a GRE to the environment (greOccName) now
-depends on the child: for FieldGreName it is the field label, rather than the
+Note that the OccName used when adding a GRE to the environment (greOccName)
+depends on the GreName: for FieldGreName it is the field label, rather than the
 OccName of the selector.
+
+A GreName, and hence a GRE, has both a "printable" and a "mangled" Name.  These
+are identical for normal names, but for record fields compiled with
+-XDuplicateRecordFields they will differ.  For such record fields:
+
+ * The "mangled" Name is the actual Name of the selector function,
+   e.g. $sel:foo:MkT.  This should not be displayed to the user, but is used to
+   uniquely identify the field in the renamer, and later in the backend.
+
+ * The "printable" Name is the "manged" Name with its OccName replaced with that
+   of the field label.  This is how the field should be output to the user.
 
 Pattern synonym constructors and record fields are unusual: their parent
 information is NoParent in the module in which they are defined.  However, a
@@ -649,28 +660,35 @@ gresFromAvail prov_fn avail
           Just is -> GRE { gre_name = FieldGreName fl, gre_par = availParent avail
                          , gre_lcl = False, gre_imp = [is] }
 
--- | The Name Careful: the OccName of this Name is not
--- necessarily the same as the greOccName (see Note [GreNames]).
-greInternalName :: GlobalRdrElt -> Name
-greInternalName = greNameInternal . gre_name
+instance HasOccName GlobalRdrElt where
+  occName = greOccName
 
--- | A Name for the GRE suitable for output to the user.  Its OccName will be
--- the greOccName.
+-- | See Note [GreNames]
+greOccName :: GlobalRdrElt -> OccName
+greOccName = occName . gre_name
+
+-- | A 'Name' for the GRE for internal use.  Careful: the 'OccName' of this
+-- 'Name' is not necessarily the same as the 'greOccName' (see Note [GreNames]).
+greMangledName :: GlobalRdrElt -> Name
+greMangledName = greNameMangledName . gre_name
+
+-- | A 'Name' for the GRE suitable for output to the user.  Its 'OccName' will
+-- be the 'greOccName' (see Note [GreNames]).
 grePrintableName :: GlobalRdrElt -> Name
-grePrintableName = greNamePrintable . gre_name
+grePrintableName = greNamePrintableName . gre_name
 
 -- | The SrcSpan of the name pointed to by the GRE.
 greDefinitionSrcSpan :: GlobalRdrElt -> SrcSpan
-greDefinitionSrcSpan = greNameSrcSpan . gre_name
+greDefinitionSrcSpan = nameSrcSpan . greMangledName
 
 -- | The module in which the name pointed to by the GRE is defined.
 greDefinitionModule :: GlobalRdrElt -> Maybe Module
-greDefinitionModule = nameModule_maybe . greInternalName
+greDefinitionModule = nameModule_maybe . greMangledName
 
 greQualModName :: GlobalRdrElt -> ModuleName
 -- Get a suitable module qualifier for the GRE
 -- (used in mkPrintUnqualified)
--- Prerecondition: the greInternalName is always External
+-- Prerecondition: the greMangledName is always External
 greQualModName gre@(GRE { gre_lcl = lcl, gre_imp = iss })
  | lcl, Just mod <- greDefinitionModule gre = moduleName mod
  | (is:_) <- iss                            = is_as (is_decl is)
@@ -734,10 +752,10 @@ gresToAvailInfo gres
       = ( extendNameEnv_Acc comb availFromGRE env key gre
         , done `extendNameSet` name )
       where
-        name = greInternalName gre
+        name = greMangledName gre
         key = case greParent_maybe gre of
                  Just parent -> parent
-                 Nothing     -> greInternalName gre
+                 Nothing     -> greMangledName gre
 
         -- We want to insert the child `k` into a list of children but
         -- need to maintain the invariant that the parent is first.
@@ -770,7 +788,7 @@ globalRdrEnvElts :: GlobalRdrEnv -> [GlobalRdrElt]
 globalRdrEnvElts env = foldOccEnv (++) [] env
 
 instance Outputable GlobalRdrElt where
-  ppr gre = hang (ppr (greInternalName gre) <+> ppr (gre_par gre))
+  ppr gre = hang (ppr (greMangledName gre) <+> ppr (gre_par gre))
                2 (pprNameProvenance gre)
 
 pprGlobalRdrEnv :: Bool -> GlobalRdrEnv -> SDoc
@@ -788,19 +806,12 @@ pprGlobalRdrEnv locals_only env
                      <> colon)
                  2 (vcat (map ppr gres))
       where
-        occ = nameOccName (greInternalName (head gres))
+        occ = nameOccName (greMangledName (head gres))
 
 lookupGlobalRdrEnv :: GlobalRdrEnv -> OccName -> [GlobalRdrElt]
 lookupGlobalRdrEnv env occ_name = case lookupOccEnv env occ_name of
                                   Nothing   -> []
                                   Just gres -> gres
-
-instance HasOccName GlobalRdrElt where
-  occName = greOccName
-
--- | See Note [GreNames]
-greOccName :: GlobalRdrElt -> OccName
-greOccName = occName . gre_name
 
 lookupGRE_RdrName :: RdrName -> GlobalRdrEnv -> [GlobalRdrElt]
 lookupGRE_RdrName rdr_name env
@@ -820,7 +831,7 @@ lookupGRE_GreName :: GlobalRdrEnv -> GreName -> Maybe GlobalRdrElt
 -- whether it is in scope, ignoring anything else that might be in
 -- scope with the same 'OccName'.
 lookupGRE_GreName env gname
-  = lookupGRE_Name_OccName env (greNameInternal gname) (occName gname)
+  = lookupGRE_Name_OccName env (greNameMangledName gname) (occName gname)
 
 lookupGRE_FieldLabel :: GlobalRdrEnv -> FieldLabel -> Maybe GlobalRdrElt
 -- ^ Look for a particular record field selector in the environment, where the
@@ -835,7 +846,7 @@ lookupGRE_Name_OccName :: GlobalRdrEnv -> Name -> OccName -> Maybe GlobalRdrElt
 -- Note [Parents for record fields].
 lookupGRE_Name_OccName env name occ
   = case [ gre | gre <- lookupGlobalRdrEnv env occ
-               , greInternalName gre == name ] of
+               , greMangledName gre == name ] of
       []    -> Nothing
       [gre] -> Just gre
       gres  -> pprPanic "lookupGRE_Name_OccName"
@@ -961,7 +972,7 @@ pickGREsModExp mod gres = mapMaybe (pickBothGRE mod) gres
 -- GHC.Base and GHC.Tuple.
 pickBothGRE :: ModuleName -> GlobalRdrElt -> Maybe (GlobalRdrElt, GlobalRdrElt)
 pickBothGRE mod gre
-  | isBuiltInSyntax (greInternalName gre)   = Nothing
+  | isBuiltInSyntax (greMangledName gre)   = Nothing
   | Just gre1 <- pickQualGRE mod gre
   , Just gre2 <- pickUnqualGRE   gre = Just (gre1, gre2)
   | otherwise                        = Nothing
@@ -1296,7 +1307,7 @@ pprNameProvenance gre@(GRE { gre_lcl = lcl, gre_imp = iss })
   = ifPprDebug (vcat pp_provs)
                (head pp_provs)
   where
-    name = greInternalName gre
+    name = greMangledName gre
     pp_provs = pp_lcl ++ map pp_is iss
     pp_lcl = if lcl then [text "defined at" <+> ppr (nameSrcLoc name)]
                     else []
