@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 
 module GHC.Tc.Solver(
-       simplifyInfer, InferMode(..),
+       InferMode(..), simplifyInfer, findInferredDiff,
        growThetaTyVars,
        simplifyAmbiguityCheck,
        simplifyDefault,
@@ -933,18 +933,19 @@ simplifyInfer rhs_tclvl infer_mode sigs name_taus wanteds
        -- bindings, so we can't just revert to the input
        -- constraint.
 
-       ; tc_env          <- TcM.getEnv
+--       ; tc_env          <- TcM.getEnv
        ; ev_binds_var    <- TcM.newTcEvBinds
-       ; psig_theta_vars <- mapM TcM.newEvVar psig_theta
+       ; psig_evs <- newWanteds AnnOrigin psig_theta
+--       ; psig_theta_vars <- mapM TcM.newEvVar psig_theta
        ; wanted_transformed_incl_derivs
             <- setTcLevel rhs_tclvl $
                runTcSWithEvBinds ev_binds_var $
-               do { let loc         = mkGivenLoc rhs_tclvl UnkSkol $
-                                      env_lcl tc_env
-                        psig_givens = mkGivens loc psig_theta_vars
-                  ; _ <- solveSimpleGivens psig_givens
+               do { -- let loc         = mkGivenLoc rhs_tclvl UnkSkol $
+                    --                  env_lcl tc_env
+                    --    psig_givens = mkGivens loc psig_theta_vars
+                  ; -- _ <- solveSimpleGivens psig_givens
                          -- See Note [Add signature contexts as givens]
-                  ; solveWanteds wanteds }
+                  ; solveWanteds (mkSimpleWC psig_evs `andWC` wanteds) }
 
        -- Find quant_pred_candidates, the predicates that
        -- we'll consider quantifying over
@@ -975,17 +976,18 @@ simplifyInfer rhs_tclvl infer_mode sigs name_taus wanteds
        -- We must produce bindings for the psig_theta_vars, because we may have
        -- used them in evidence bindings constructed by solveWanteds earlier
        -- Easiest way to do this is to emit them as new Wanteds (#14643)
-       ; ct_loc <- getCtLocM AnnOrigin Nothing
-       ; let psig_wanted = [ CtWanted { ctev_pred = idType psig_theta_var
-                                      , ctev_dest = EvVarDest psig_theta_var
-                                      , ctev_nosh = WDeriv
-                                      , ctev_loc  = ct_loc }
-                           | psig_theta_var <- psig_theta_vars ]
+--       ; ct_loc <- getCtLocM AnnOrigin Nothing
+--       ; let psig_wanted = [ CtWanted { ctev_pred = idType psig_theta_var
+--                                      , ctev_dest = EvVarDest psig_theta_var
+--                                      , ctev_nosh = WDeriv
+--                                      , ctev_loc  = ct_loc }
+--                           | psig_theta_var <- psig_theta_vars ]
 
        -- Now construct the residual constraint
        ; residual_wanted <- mkResidualConstraints rhs_tclvl ev_binds_var
                                  name_taus co_vars qtvs bound_theta_vars
-                                 (wanted_transformed `andWC` mkSimpleWC psig_wanted)
+                                 wanted_transformed
+--                                 (wanted_transformed `andWC` mkSimpleWC psig_wanted)
 
          -- All done!
        ; traceTc "} simplifyInfer/produced residual implication for quantification" $
@@ -1018,7 +1020,8 @@ mkResidualConstraints rhs_tclvl ev_binds_var
        ; let (outer_simple, inner_simple) = partitionBag is_mono wanted_simple
              is_mono ct = isWantedCt ct && ctEvId ct `elemVarSet` co_vars
 
-        ; _ <- TcM.promoteTyVarSet (tyCoVarsOfCts outer_simple)
+-- Already done by defaultTyVarsAndSimplify
+--         ; _ <- TcM.promoteTyVarSet (tyCoVarsOfCts outer_simple)
 
         ; let inner_wanted = wanteds { wc_simple = inner_simple }
         ; implics <- if isEmptyWC inner_wanted
@@ -1047,6 +1050,32 @@ mkResidualConstraints rhs_tclvl ev_binds_var
 ctsPreds :: Cts -> [PredType]
 ctsPreds cts = [ ctEvPred ev | ct <- bagToList cts
                              , let ev = ctEvidence ct ]
+
+findInferredDiff :: TcThetaType -> TcThetaType -> TcM TcThetaType
+findInferredDiff annotated_theta inferred_theta
+  = pushTcLevelM_ $
+    do { lcl_env   <- TcM.getLclEnv
+       ; given_ids <- mapM TcM.newEvVar annotated_theta
+       ; wanteds   <- newWanteds AnnOrigin inferred_theta
+       ; let given_loc = mkGivenLoc topTcLevel UnkSkol lcl_env
+             given_cts = mkGivens given_loc given_ids
+
+       ; residual <- runTcSDeriveds $
+                     do { _ <- solveSimpleGivens given_cts
+                        ; solveSimpleWanteds (listToBag (map mkNonCanonical wanteds)) }
+
+       ; return (map (box_pred . ctPred) $
+                 bagToList               $
+                 wc_simple residual) }
+  where
+     box_pred :: PredType -> PredType
+     box_pred pred = case classifyPredType pred of
+                        EqPred rel ty1 ty2
+                          | Just (cls,tys) <- boxEqPred rel ty1 ty2
+                          -> mkClassPred cls tys
+                          | otherwise
+                          -> pprPanic "findInferredDiff" (ppr pred)
+                        _other -> pred
 
 {- Note [Emitting the residual implication in simplifyInfer]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1181,12 +1210,13 @@ decideQuantification infer_mode rhs_tclvl name_taus psigs candidates
        ; psig_theta <- TcM.zonkTcTypes (concatMap sig_inst_theta psigs)
        ; let quantifiable_candidates
                = pickQuantifiablePreds (mkVarSet qtvs) candidates
-             -- NB: do /not/ run pickQuantifiablePreds over psig_theta,
-             -- because we always want to quantify over psig_theta, and not
-             -- drop any of them; e.g. CallStack constraints.  c.f #14658
 
              theta = mkMinimalBySCs id $  -- See Note [Minimize by Superclasses]
                      (psig_theta ++ quantifiable_candidates)
+             -- NB: add psig_theta back in here, even though it's already
+             -- part of candidates, because we always want to quantify over
+             -- psig_theta, and pickQuantifiableCandidates might have
+             -- dropped some e.g. CallStack constraints.  c.f #14658
 
        ; traceTc "decideQuantification"
            (vcat [ text "infer_mode:" <+> ppr infer_mode

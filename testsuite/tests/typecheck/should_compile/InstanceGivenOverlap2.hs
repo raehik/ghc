@@ -34,6 +34,12 @@ it'sABoolLater = undefined
 g :: forall t a. Q (F (Tagged t a)) => Proxy t -> [a] -> _
 g _ x = it'sABoolNow @t + wob x
 
+{-
+   [G] Q (F (Tagged @Bool t a))
+   [W] Q [beta]    ==> Q [a]  ==>{instance}  P a
+   [W] R beta [a]  ==>   beta ~ a
+-}
+
 g2 :: forall t a. Q (F (Tagged t a)) => Proxy t -> [a] -> _
 g2 _ x = wob x + it'sABoolNow @t
 
