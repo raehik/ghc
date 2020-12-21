@@ -674,12 +674,13 @@ tc_patsyn_finish lname dir is_infix lpat'
   = do { -- Zonk everything.  We are about to build a final PatSyn
          -- so there had better be no unification variables in there
 
-         (ze, univ_tvs') <- zonkTyVarBinders univ_tvs
-       ; req_theta'      <- zonkTcTypesToTypesX ze req_theta
-       ; (ze, ex_tvs')   <- zonkTyVarBindersX ze ex_tvs
-       ; prov_theta'     <- zonkTcTypesToTypesX ze prov_theta
-       ; pat_ty'         <- zonkTcTypeToTypeX ze pat_ty
-       ; arg_tys'        <- zonkTcTypesToTypesX ze arg_tys
+       ; ze              <- emptyZonkEnv
+       ; (ze, univ_tvs') <- zonkTyVarBindersNoAny   ze univ_tvs
+       ; req_theta'      <- zonkTcTypesToTypesNoAny ze req_theta
+       ; (ze, ex_tvs')   <- zonkTyVarBindersNoAny   ze ex_tvs
+       ; prov_theta'     <- zonkTcTypesToTypesNoAny ze prov_theta
+       ; pat_ty'         <- zonkTcTypeToTypeNoAny   ze pat_ty
+       ; arg_tys'        <- zonkTcTypesToTypesNoAny ze arg_tys
 
        ; let (env1, univ_tvs) = tidyTyCoVarBinders emptyTidyEnv univ_tvs'
              (env2, ex_tvs)   = tidyTyCoVarBinders env1 ex_tvs'

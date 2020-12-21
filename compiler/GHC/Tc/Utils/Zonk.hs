@@ -32,10 +32,13 @@ module GHC.Tc.Utils.Zonk (
         zonkTopDecls, zonkTopExpr, zonkTopLExpr,
         zonkTopBndrs,
         ZonkEnv, ZonkFlexi(..), emptyZonkEnv, mkEmptyZonkEnv, initZonkEnv,
-        zonkTyVarBinders, zonkTyVarBindersX, zonkTyVarBinderX,
-        zonkTyBndrs, zonkTyBndrsX,
+        zonkTyVarBindersNoAny, zonkTyVarBinderNoAny,
+        zonkTyBndrs, zonkTyBndrsX, zonkTyBndrsNoAny,
         zonkTcTypeToType,  zonkTcTypeToTypeX,
-        zonkTcTypesToTypes, zonkTcTypesToTypesX, zonkScaledTcTypesToTypesX,
+        zonkScaledTcTypesToTypesX,
+        zonkTcTypesToTypesNoAny,
+        zonkScaledTcTypesToTypesNoAny,
+        zonkTcTypeToTypeNoAny,
         zonkTyVarOcc,
         zonkCoToCo,
         zonkEvBinds, zonkTcEvBinds,
@@ -63,7 +66,7 @@ import GHC.Tc.Utils.TcMType
 import GHC.Tc.Utils.Env   ( tcLookupGlobalOnly )
 import GHC.Tc.Types.Evidence
 
-import GHC.Core.TyCo.Ppr ( pprTyVar )
+import GHC.Core.TyCo.Ppr
 import GHC.Core.TyCon
 import GHC.Core.Type
 import GHC.Core.Coercion
@@ -283,6 +286,55 @@ There are three possibilities:
   It's a way to have a variable that is not a mutable
   unification variable, but doesn't have a binding site
   either.
+
+* ErrorFlexi: See Note [Never Anyify during kind inference]
+
+Note [Never Anyify during kind inference]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Defaulting an unconstrained metavariable to Any makes sense when
+type-checking terms, precisely because we don't care what happens
+to unconstrained metavariables. Importantly, we never later inspect
+the term to see what types it is specialised to.
+
+Not so in types! For example:
+
+  type T = forall a. Proxy a
+
+What kind does `a` have? A first guess might be that it has kind `k`,
+like `type T = forall k a. Proxy @k a`. The problem here is that a
+usage site of `T` would have no way of choosing k. Note that T :: Type,
+so kind inference will not help. So we have no idea what kind `a`
+should have: it's an unconstrained meta-variable. We thus might
+default the kind of `a` to be `Any`: `type T = forall (a :: Any). Proxy @Any a`.
+But this is almost surely not what the user wants. If they then say
+
+  p :: T
+  p = Proxy
+
+  x :: Proxy a -> a
+  x = undefined
+
+  y = x p
+
+we get an error saying that Any /= Type. Boo.
+
+Conclusion: Because we actually care what happens to meta-variables
+in types, we want to error whenever we're unsure what to do with one.
+Thus, ErrorFlexi.
+
+ErrorFlexi will have the zonker produce an error whenever it encounters
+an unconstrained metavariable. Producing an error message is challenging,
+though. We thus store the type-level type to be zonked in ErrorFlexi;
+we zonk (using the type-checker-internal zonker zonkTcType) this type and
+report when using ErrorFlexi. The caller of the zonker should create
+an appropriate context with addErrCtxt before zonking for the best-quality
+error messages.
+
+Small wrinkle: We still want to default RuntimeRep and Multiplicity vars
+to LiftedRep and Many, respectively.
+
+This is all a fix for #17567, and tested in typecheck/should_fail/T17301
+and T17567.
 -}
 
 data ZonkFlexi   -- See Note [Un-unified unification variables]
@@ -290,6 +342,7 @@ data ZonkFlexi   -- See Note [Un-unified unification variables]
   | SkolemiseFlexi  -- Skolemise unbound unification variables
                     -- See Note [Zonking the LHS of a RULE]
   | RuntimeUnkFlexi -- Used in the GHCi debugger
+  | ErrorFlexi TcType   -- See Note [Never Anyify during kind inference]
 
 instance Outputable ZonkEnv where
   ppr (ZonkEnv { ze_tv_env = tv_env
@@ -437,33 +490,40 @@ zonkTyBndrs tvs = initZonkEnv $ \ze -> zonkTyBndrsX ze tvs
 zonkTyBndrsX :: ZonkEnv -> [TcTyVar] -> TcM (ZonkEnv, [TyVar])
 zonkTyBndrsX = mapAccumLM zonkTyBndrX
 
+zonkTyBndrsNoAny :: ZonkEnv -> [TcTyVar] -> TcM (ZonkEnv, [TyVar])
+zonkTyBndrsNoAny = mapAccumLM zonkTyBndrNoAny
+
 zonkTyBndrX :: ZonkEnv -> TcTyVar -> TcM (ZonkEnv, TyVar)
+zonkTyBndrX = zonk_ty_bndr zonkTcTypeToTypeX
+
+zonk_ty_bndr :: (ZonkEnv -> TcType -> TcM Type)
+             -> ZonkEnv -> TcTyVar -> TcM (ZonkEnv, TyVar)
 -- This guarantees to return a TyVar (not a TcTyVar)
 -- then we add it to the envt, so all occurrences are replaced
 --
 -- It does not clone: the new TyVar has the sane Name
 -- as the old one.  This important when zonking the
 -- TyVarBndrs of a TyCon, whose Names may scope.
-zonkTyBndrX env tv
+zonk_ty_bndr type_zonker env tv
   = ASSERT2( isImmutableTyVar tv, ppr tv <+> dcolon <+> ppr (tyVarKind tv) )
-    do { ki <- zonkTcTypeToTypeX env (tyVarKind tv)
+    do { ki <- type_zonker env (tyVarKind tv)
                -- Internal names tidy up better, for iface files.
        ; let tv' = mkTyVar (tyVarName tv) ki
        ; return (extendTyZonkEnv env tv', tv') }
 
-zonkTyVarBinders ::  [VarBndr TcTyVar vis]
-                 -> TcM (ZonkEnv, [VarBndr TyVar vis])
-zonkTyVarBinders tvbs = initZonkEnv $ \ ze -> zonkTyVarBindersX ze tvbs
+-- Uses zonkTcTypeToTypeNoAny for the kind; see Note [Never Anyify during kind inference]
+zonkTyBndrNoAny :: ZonkEnv -> TcTyVar -> TcM (ZonkEnv, TcTyVar)
+zonkTyBndrNoAny = zonk_ty_bndr zonkTcTypeToTypeNoAny
 
-zonkTyVarBindersX :: ZonkEnv -> [VarBndr TcTyVar vis]
-                             -> TcM (ZonkEnv, [VarBndr TyVar vis])
-zonkTyVarBindersX = mapAccumLM zonkTyVarBinderX
+zonkTyVarBindersNoAny :: ZonkEnv -> [VarBndr TcTyVar vis]
+                                 -> TcM (ZonkEnv, [VarBndr TyVar vis])
+zonkTyVarBindersNoAny = mapAccumLM zonkTyVarBinderNoAny
 
-zonkTyVarBinderX :: ZonkEnv -> VarBndr TcTyVar vis
-                            -> TcM (ZonkEnv, VarBndr TyVar vis)
+zonkTyVarBinderNoAny :: ZonkEnv -> VarBndr TcTyVar vis
+                     -> TcM (ZonkEnv, VarBndr TyVar vis)
 -- Takes a TcTyVar and guarantees to return a TyVar
-zonkTyVarBinderX env (Bndr tv vis)
-  = do { (env', tv') <- zonkTyBndrX env tv
+zonkTyVarBinderNoAny env (Bndr tv vis)
+  = do { (env', tv') <- zonkTyBndrNoAny env tv
        ; return (env', Bndr tv' vis) }
 
 zonkTopExpr :: HsExpr GhcTc -> TcM (HsExpr GhcTc)
@@ -1812,20 +1872,13 @@ lookupTyVarOcc (ZonkEnv { ze_tv_env = tv_env }) tv
   = lookupVarEnv tv_env tv
 
 commitFlexi :: ZonkFlexi -> TcTyVar -> Kind -> TcM Type
--- Only monadic so we can do tc-tracing
 commitFlexi flexi tv zonked_kind
   = case flexi of
       SkolemiseFlexi  -> return (mkTyVarTy (mkTyVar name zonked_kind))
 
       DefaultFlexi
-        | isRuntimeRepTy zonked_kind
-        -> do { traceTc "Defaulting flexi tyvar to LiftedRep:" (pprTyVar tv)
-              ; return liftedRepTy }
-        | isMultiplicityTy zonked_kind
-        -> do { traceTc "Defaulting flexi tyvar to Many:" (pprTyVar tv)
-              ; return manyDataConTy }
-        | otherwise
-        -> do { traceTc "Defaulting flexi tyvar to Any:" (pprTyVar tv)
+        -> try_defaulting_and_then $
+           do { traceTc "Defaulting flexi tyvar to Any:" (pprTyVar tv)
               ; return (anyTypeOfKind zonked_kind) }
 
       RuntimeUnkFlexi
@@ -1835,8 +1888,42 @@ commitFlexi flexi tv zonked_kind
                         -- otherwise-unconstrained unification variables are
                         -- turned into RuntimeUnks as they leave the
                         -- typechecker's monad
+
+      ErrorFlexi orig_ty
+        -> try_defaulting_and_then $
+           do { traceTc "Erroring because of ErrorFlexi:"
+                        (ppr tv <+> dcolon <+> ppr (tyVarKind tv))
+              ; (tidy_env, zonked_ty) <- zonkTidyTcType emptyTidyEnv orig_ty
+              ; zonked_tv <- zonkTcTyVarToTyVar tv
+                  -- why zonk the tv? It might be filled in with an unfilled tv.
+
+              ; let tidy_tv = tidyTyCoVarOcc tidy_env zonked_tv
+                        -- This kind of problem only happens in very poly-kinded
+                        -- code
+                    ppr_ty  = pprWithExplicitKindsWhen True (ppr zonked_ty)
+                    msg = hang (text "Uninferrable type variable" <+>
+                                quotes (ppr tidy_tv) <+>
+                                text "in")
+                             2 ppr_ty
+
+                  -- continuing just causes downstream errors around Any;
+                  -- much easier to abort in this uncommon case than to
+                  -- work hard to continue
+              ; failWithTcM (tidy_env, msg) }
+
   where
      name = tyVarName tv
+
+     try_defaulting_and_then :: TcM Type -> TcM Type
+     try_defaulting_and_then action
+       | isRuntimeRepTy zonked_kind
+       = do { traceTc "Defaulting flexi tyvar to LiftedRep:" (pprTyVar tv)
+            ; return liftedRepTy }
+       | isMultiplicityTy zonked_kind
+       = do { traceTc "Defaulting flexi tyvar to Many:" (pprTyVar tv)
+            ; return manyDataConTy }
+       | otherwise
+       = action
 
 zonkCoVarOcc :: ZonkEnv -> CoVar -> TcM Coercion
 zonkCoVarOcc (ZonkEnv { ze_tv_env = tyco_env }) cv
@@ -1887,26 +1974,33 @@ zonkTcTyConToTyCon tc
 zonkTcTypeToType :: TcType -> TcM Type
 zonkTcTypeToType ty = initZonkEnv $ \ ze -> zonkTcTypeToTypeX ze ty
 
-zonkTcTypesToTypes :: [TcType] -> TcM [Type]
-zonkTcTypesToTypes tys = initZonkEnv $ \ ze -> zonkTcTypesToTypesX ze tys
+zonkTcTypesToTypesNoAny :: ZonkEnv -> [TcType] -> TcM [Type]
+zonkTcTypesToTypesNoAny env = mapM (zonkTcTypeToTypeNoAny env)
 
 zonkScaledTcTypeToTypeX :: ZonkEnv -> Scaled TcType -> TcM (Scaled TcType)
 zonkScaledTcTypeToTypeX env (Scaled m ty) = Scaled <$> zonkTcTypeToTypeX env m
                                                    <*> zonkTcTypeToTypeX env ty
 
+zonkScaledTcTypeToTypeNoAny :: ZonkEnv -> Scaled TcType -> TcM (Scaled TcType)
+zonkScaledTcTypeToTypeNoAny env (Scaled m ty) = Scaled <$> zonkTcTypeToTypeNoAny env m
+                                                       <*> zonkTcTypeToTypeNoAny env ty
+
 zonkTcTypeToTypeX   :: ZonkEnv -> TcType   -> TcM Type
-zonkTcTypesToTypesX :: ZonkEnv -> [TcType] -> TcM [Type]
 zonkCoToCo          :: ZonkEnv -> Coercion -> TcM Coercion
-(zonkTcTypeToTypeX, zonkTcTypesToTypesX, zonkCoToCo, _)
+(zonkTcTypeToTypeX, _, zonkCoToCo, _)
   = mapTyCoX zonk_tycomapper
 
 zonkScaledTcTypesToTypesX :: ZonkEnv -> [Scaled TcType] -> TcM [Scaled Type]
 zonkScaledTcTypesToTypesX env scaled_tys =
    mapM (zonkScaledTcTypeToTypeX env) scaled_tys
 
+zonkScaledTcTypesToTypesNoAny :: ZonkEnv -> [Scaled TcType] -> TcM [Scaled Type]
+zonkScaledTcTypesToTypesNoAny env scaled_tys =
+  mapM (zonkScaledTcTypeToTypeNoAny env) scaled_tys
+
 zonkTcMethInfoToMethInfoX :: ZonkEnv -> TcMethInfo -> TcM MethInfo
 zonkTcMethInfoToMethInfoX ze (name, ty, gdm_spec)
-  = do { ty' <- zonkTcTypeToTypeX ze ty
+  = do { ty' <- zonkTcTypeToTypeNoAny ze ty
        ; gdm_spec' <- zonk_gdm gdm_spec
        ; return (name, ty', gdm_spec') }
   where
@@ -1917,6 +2011,13 @@ zonkTcMethInfoToMethInfoX ze (name, ty, gdm_spec)
     zonk_gdm (Just (GenericDM (loc, ty)))
       = do { ty' <- zonkTcTypeToTypeX ze ty
            ; return (Just (GenericDM (loc, ty'))) }
+
+
+-- | Zonk a 'TcType' to a proper, final 'Type', but error on any unconstrained
+-- meta-variables. Use this variant when, e.g., zonking types right before
+-- constructing a TyCon. See Note [Never Anyify during kind inference].
+zonkTcTypeToTypeNoAny :: ZonkEnv -> TcType -> TcM TcType
+zonkTcTypeToTypeNoAny env ty = zonkTcTypeToTypeX (env { ze_flexi = ErrorFlexi ty }) ty
 
 ---------------------------------------
 {- Note [Zonking the LHS of a RULE]

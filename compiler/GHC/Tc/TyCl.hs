@@ -888,10 +888,10 @@ generaliseTcTyCon (tc, scoped_prs, tc_res_kind)
        -- Step 3: Final zonk (following kind generalisation)
        -- See Note [Swizzling the tyvars before generaliseTcTyCon]
        ; ze <- emptyZonkEnv
-       ; (ze, inferred)        <- zonkTyBndrsX ze inferred
-       ; (ze, sorted_spec_tvs) <- zonkTyBndrsX ze sorted_spec_tvs
-       ; (ze, req_tvs)         <- zonkTyBndrsX ze req_tvs
-       ; tc_res_kind           <- zonkTcTypeToTypeX ze tc_res_kind
+       ; (ze, inferred)        <- zonkTyBndrsNoAny       ze inferred
+       ; (ze, sorted_spec_tvs) <- zonkTyBndrsNoAny       ze sorted_spec_tvs
+       ; (ze, req_tvs)         <- zonkTyBndrsNoAny       ze req_tvs
+       ; tc_res_kind           <- zonkTcTypeToTypeNoAny ze tc_res_kind
 
        ; traceTc "generaliseTcTyCon: post zonk" $
          vcat [ text "tycon =" <+> ppr tc
@@ -2353,7 +2353,7 @@ tcClassDecl1 roles_info class_name hs_ctxt meths fundeps sigs ats at_defs
        -- The zonk also squeeze out the TcTyCons, and converts
        -- Skolems to tyvars.
        ; ze        <- emptyZonkEnv
-       ; ctxt      <- zonkTcTypesToTypesX ze ctxt
+       ; ctxt      <- zonkTcTypesToTypesNoAny ze ctxt
        ; sig_stuff <- mapM (zonkTcMethInfoToMethInfoX ze) sig_stuff
          -- ToDo: do we need to zonk at_stuff?
 
@@ -2739,7 +2739,8 @@ tcTySynRhs roles_info tc_name hs_ty
        ; traceTc "tc-syn" (ppr tc_name $$ ppr (tcl_env env))
        ; rhs_ty <- pushLevelAndSolveEqualities skol_info (binderVars binders) $
                    tcCheckLHsType hs_ty (TheKind res_kind)
-       ; rhs_ty <- zonkTcTypeToType rhs_ty
+       ; ze <- emptyZonkEnv
+       ; rhs_ty <- zonkTcTypeToTypeNoAny ze rhs_ty
        ; let roles = roles_info tc_name
        ; return (buildSynTyCon tc_name binders res_kind roles rhs_ty) }
   where
@@ -2776,7 +2777,8 @@ tcDataDefn err_ctxt roles_info tc_name
        ; let skol_tvs = binderVars tycon_binders
        ; stupid_tc_theta <- pushLevelAndSolveEqualities skol_info skol_tvs $
                             tcHsContext ctxt
-       ; stupid_theta    <- zonkTcTypesToTypes stupid_tc_theta
+       ; ze              <- emptyZonkEnv
+       ; stupid_theta    <- zonkTcTypesToTypesNoAny ze stupid_tc_theta
        ; kind_signatures <- xoptM LangExt.KindSignatures
 
              -- Check that we don't use kind signatures without Glasgow extensions
@@ -3016,9 +3018,10 @@ tcTyFamInstEqnGuts fam_tc mb_clsinfo outer_hs_bndrs hs_pats hs_rhs_ty
               , text "lhs_ty"     <+> ppr lhs_ty
               , text "qtvs"       <+> pprTyVars qtvs ]
 
-       ; (ze, qtvs) <- zonkTyBndrs qtvs
-       ; lhs_ty     <- zonkTcTypeToTypeX ze lhs_ty
-       ; rhs_ty     <- zonkTcTypeToTypeX ze rhs_ty
+       ; ze         <- emptyZonkEnv
+       ; (ze, qtvs) <- zonkTyBndrsNoAny      ze qtvs
+       ; lhs_ty     <- zonkTcTypeToTypeNoAny ze lhs_ty
+       ; rhs_ty     <- zonkTcTypeToTypeNoAny ze rhs_ty
 
        ; let pats = unravelFamInstPats lhs_ty
              -- Note that we do this after solveEqualities
@@ -3283,10 +3286,11 @@ tcConDecl new_or_data dd_info rep_tycon tc_bndrs res_kind tag_map
              -- See test dependent/should_fail/T13780a
 
        -- Zonk to Types
-       ; (ze, qkvs)          <- zonkTyBndrs kvs
-       ; (ze, user_qtvbndrs) <- zonkTyVarBindersX ze exp_tvbndrs
-       ; arg_tys             <- zonkScaledTcTypesToTypesX ze arg_tys
-       ; ctxt                <- zonkTcTypesToTypesX ze ctxt
+       ; ze                  <- emptyZonkEnv
+       ; (ze, qkvs)          <- zonkTyBndrsNoAny              ze kvs
+       ; (ze, user_qtvbndrs) <- zonkTyVarBindersNoAny         ze exp_tvbndrs
+       ; arg_tys             <- zonkScaledTcTypesToTypesNoAny ze arg_tys
+       ; ctxt                <- zonkTcTypesToTypesNoAny       ze ctxt
 
        -- Can't print univ_tvs, arg_tys etc, because we are inside the knot here
        ; traceTc "tcConDecl 2" (ppr name $$ ppr field_lbls)
@@ -3368,10 +3372,11 @@ tcConDecl new_or_data dd_info rep_tycon tc_bndrs _res_kind tag_map
        ; let tvbndrs =  mkTyVarBinders InferredSpec tkvs ++ outer_tv_bndrs
 
              -- Zonk to Types
-       ; (ze, tvbndrs) <- zonkTyVarBinders       tvbndrs
-       ; arg_tys       <- zonkScaledTcTypesToTypesX ze arg_tys
-       ; ctxt          <- zonkTcTypesToTypesX ze ctxt
-       ; res_ty        <- zonkTcTypeToTypeX   ze res_ty
+       ; ze            <- emptyZonkEnv
+       ; (ze, tvbndrs) <- zonkTyVarBindersNoAny         ze tvbndrs
+       ; arg_tys       <- zonkScaledTcTypesToTypesNoAny ze arg_tys
+       ; ctxt          <- zonkTcTypesToTypesNoAny       ze ctxt
+       ; res_ty        <- zonkTcTypeToTypeNoAny         ze res_ty
 
        ; let res_tmpl = mkDDHeaderTy dd_info rep_tycon tc_bndrs
              (univ_tvs, ex_tvs, tvbndrs', eq_preds, arg_subst)

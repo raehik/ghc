@@ -912,11 +912,12 @@ tcDataFamInstHeader mb_clsinfo fam_tc outer_bndrs fixity
        ; reportUnsolvedEqualities FamInstSkol qtvs tclvl wanted
 
        -- Zonk the patterns etc into the Type world
-       ; (ze, qtvs)   <- zonkTyBndrs qtvs
-       ; lhs_ty       <- zonkTcTypeToTypeX   ze lhs_ty
-       ; stupid_theta <- zonkTcTypesToTypesX ze stupid_theta
-       ; master_res_kind   <- zonkTcTypeToTypeX ze master_res_kind
-       ; instance_res_kind <- zonkTcTypeToTypeX ze instance_res_kind
+       ; ze           <- emptyZonkEnv
+       ; (ze, qtvs)   <- zonkTyBndrsNoAny           ze qtvs
+       ; lhs_ty       <- zonkTcTypeToTypeNoAny      ze lhs_ty
+       ; stupid_theta <- zonkTcTypesToTypesNoAny    ze stupid_theta
+       ; master_res_kind   <- zonkTcTypeToTypeNoAny ze master_res_kind
+       ; instance_res_kind <- zonkTcTypeToTypeNoAny ze instance_res_kind
 
        -- We check that res_kind is OK with checkDataKindSig in
        -- tcDataFamInstDecl, after eta-expansion.  We need to check that

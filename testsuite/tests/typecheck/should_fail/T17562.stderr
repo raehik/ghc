@@ -1,0 +1,5 @@
+
+T17562.hs:5:1: error:
+    • Uninferrable type variable ‘k0’ in
+        forall (a :: * -> k0). (a b :: k0) ~ (a c :: k0)
+    • In the class declaration for ‘C’
